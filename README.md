@@ -35,17 +35,26 @@ poetry install
 The fastest way to try it out:
 
 ```bash
-# Start the service (automatically sets up /tmp/pod-service)
+# Start the service (automatically creates ./data directory)
 make serve
-
-# In another terminal, add a YouTube URL
-echo "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >> /Volumes/Storage/Data/Tmp/Pod-Service/Urls.txt
-
-# Open in your browser
-open http://localhost:8083/feed.xml
 ```
 
-That's it! The service will download the video as audio and add it to the feed.
+**Add YouTube URLs:**
+
+Option 1 - Web interface (easiest):
+- Open http://localhost:8083 in your browser
+- Paste YouTube URL and click "Add to Podcast"
+
+Option 2 - Command line:
+```bash
+echo "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >> data/urls.txt
+```
+
+**View feed:**
+- Feed XML: http://localhost:8083/feed.xml
+- Audio files: http://localhost:8083/audio
+
+The service automatically downloads videos as audio and updates the feed in real-time.
 
 ## Production Setup
 
