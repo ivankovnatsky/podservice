@@ -22,7 +22,7 @@ dependencies = [
 Homepage = "https://github.com/ivankovnatsky/podservice"
 
 [project.scripts]
-podservice = "pod_service.cli:main"
+podservice = "podservice.cli:main"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -50,10 +50,10 @@ click = "*"
 pytest = "*"
 
 [tool.poetry.scripts]
-podservice = "pod_service.cli:main"
+podservice = "podservice.cli:main"
 
 [tool.setuptools]
-packages = ["pod_service"]
+packages = ["podservice"]
 
 [tool.ruff.lint]
 extend-select = ["I"]

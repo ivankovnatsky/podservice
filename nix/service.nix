@@ -170,7 +170,7 @@ in
         User = cfg.user;
         Group = cfg.group;
         WorkingDirectory = cfg.dataDir;
-        ExecStart = "${pythonEnv}/bin/python -m pod_service serve --config ${configFile}";
+        ExecStart = "${pythonEnv}/bin/python -m podservice serve --config ${configFile}";
         Restart = "on-failure";
         RestartSec = "10s";
 
@@ -204,7 +204,7 @@ in
         ProgramArguments = [
           "${pythonEnv}/bin/python"
           "-m"
-          "pod_service"
+          "podservice"
           "serve"
           "--config"
           "${configFile}"

@@ -80,9 +80,9 @@
             echo "FFmpeg: $(ffmpeg -version | head -n1)"
             echo ""
             echo "Available commands:"
-            echo "  python -m pod_service serve  - Run the service"
-            echo "  python -m pod_service init   - Initialize config"
-            echo "  python -m pod_service info   - Show service info"
+            echo "  python -m podservice serve  - Run the service"
+            echo "  python -m podservice init   - Initialize config"
+            echo "  python -m podservice info   - Show service info"
             echo ""
           '';
         };

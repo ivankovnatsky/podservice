@@ -201,7 +201,7 @@ netstat -an | grep 8083
 nix develop /Users/ivan/Sources/github.com/ivankovnatsky/podservice
 
 # Run directly
-python -m pod_service info
+python -m podservice info
 ```
 
 ### View detailed logs
