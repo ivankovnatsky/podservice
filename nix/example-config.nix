@@ -1,4 +1,4 @@
-# Example configuration for pod-service
+# Example configuration for podservice
 # Add this to your NixOS or nix-darwin configuration
 
 { config, pkgs, ... }:
@@ -6,15 +6,15 @@
 {
   # Import the service module
   imports = [
-    /path/to/pod-service/nix/service.nix
+    /path/to/podservice/nix/service.nix
   ];
 
   # Or if using flakes:
   # imports = [
-  #   inputs.pod-service.nixosModules.default
+  #   inputs.podservice.nixosModules.default
   # ];
 
-  services.pod-service = {
+  services.podservice = {
     enable = true;
 
     # Server configuration
@@ -23,11 +23,11 @@
     baseUrl = "http://192.168.50.4:8083"; # Update to your server's IP/domain
 
     # Storage paths
-    dataDir = "/Volumes/Storage/Data/Tmp/Pod-Service"; # macOS
-    # dataDir = "/var/lib/pod-service"; # Linux
+    dataDir = "/Volumes/Storage/Data/Media/Podservice"; # macOS
+    # dataDir = "/var/lib/podservice"; # Linux
 
-    audioDir = "/Volumes/Storage/Data/Tmp/Pod-Service/Audio"; # macOS
-    # audioDir = "/var/lib/pod-service/Audio"; # Linux
+    audioDir = "/Volumes/Storage/Data/Media/Podservice/audio"; # macOS
+    # audioDir = "/var/lib/podservice/audio"; # Linux
 
     # Podcast metadata
     podcast = {
@@ -42,8 +42,8 @@
     # File watching
     watch = {
       enabled = true;
-      file = "/Volumes/Storage/Data/Tmp/Pod-Service/Urls.txt"; # macOS
-      # file = "/var/lib/pod-service/Urls.txt"; # Linux
+      file = "/Volumes/Storage/Data/Media/Podservice/urls.txt"; # macOS
+      # file = "/var/lib/podservice/urls.txt"; # Linux
     };
 
     # Logging

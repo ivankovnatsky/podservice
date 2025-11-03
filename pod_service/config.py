@@ -1,4 +1,4 @@
-"""Configuration management for pod-service."""
+"""Configuration management for podservice."""
 
 import os
 import platform
@@ -34,7 +34,7 @@ class PodcastConfig:
 class StorageConfig:
     """Storage paths configuration."""
 
-    data_dir: str = "/tmp/pod-service"
+    data_dir: str = "/tmp/podservice"
     audio_dir: Optional[str] = None
 
     def __post_init__(self):
@@ -52,7 +52,7 @@ class StorageConfig:
 class WatchConfig:
     """File watching configuration."""
 
-    file: str = "/tmp/pod-service/urls.txt"
+    file: str = "/tmp/podservice/urls.txt"
     enabled: bool = True
 
     def __post_init__(self):
@@ -77,10 +77,10 @@ def get_default_config_path() -> Path:
 
     if platform.system() == "Darwin":
         # macOS
-        return home / "Library" / "Application Support" / "pod-service" / "config.yaml"
+        return home / "Library" / "Application Support" / "podservice" / "config.yaml"
     else:
         # Linux and other Unix-like systems
-        return home / ".config" / "pod-service" / "config.yaml"
+        return home / ".config" / "podservice" / "config.yaml"
 
 
 def load_config(config_path: Optional[str] = None) -> ServiceConfig:

@@ -20,8 +20,8 @@ Apple Podcasts and other podcast players.
 
 ```bash
 # Clone the repo
-git clone https://github.com/ivankovnatsky/pod-service
-cd pod-service
+git clone https://github.com/ivankovnatsky/podservice
+cd podservice
 
 # Using Nix (recommended)
 make dev
@@ -60,16 +60,16 @@ The service automatically downloads videos as audio and updates the feed in real
 
 1. **Initialize configuration:**
    ```bash
-   pod-service init
+   podservice init
    ```
 
 2. **Edit the config file:**
-   - macOS: `~/Library/Application Support/pod-service/config.yaml`
-   - Linux: `~/.config/pod-service/config.yaml`
+   - macOS: `~/Library/Application Support/podservice/config.yaml`
+   - Linux: `~/.config/podservice/config.yaml`
 
 3. **Start the service:**
    ```bash
-   pod-service serve
+   podservice serve
    ```
 
 4. **Subscribe in Apple Podcasts:**
@@ -87,19 +87,19 @@ make test          # Run tests
 make help          # Show all commands
 
 # Or use CLI directly
-pod-service serve  # Start service
-pod-service init   # Initialize config
-pod-service info   # Show info
+podservice serve  # Start service
+podservice init   # Initialize config
+podservice info   # Show info
 
 # With tmuxinator (full dev environment)
-tmuxinator start pod-service
+tmuxinator start podservice
 ```
 
 ## Configuration
 
 Configuration file is located at:
-- macOS: `~/Library/Application Support/pod-service/config.yaml`
-- Linux: `~/.config/pod-service/config.yaml`
+- macOS: `~/Library/Application Support/podservice/config.yaml`
+- Linux: `~/.config/podservice/config.yaml`
 
 Example configuration:
 
@@ -155,7 +155,7 @@ This service is inspired by:
 - [podsync](https://github.com/mxpv/podsync) - Full-featured YouTube/Vimeo to podcast converter (Go)
 - [textcast](https://github.com/ivankovnatsky/textcast) - Text-to-speech podcast service (Python)
 
-Pod-service is simpler and more focused: just YouTube URLs to podcast episodes.
+Podservice is simpler and more focused: just YouTube URLs to podcast episodes.
 
 ## Requirements
 

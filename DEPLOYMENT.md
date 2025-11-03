@@ -1,6 +1,6 @@
 # Deployment Guide
 
-This guide covers deploying pod-service on your infrastructure.
+This guide covers deploying podservice on your infrastructure.
 
 ## Network Configuration
 
@@ -8,13 +8,13 @@ Based on your setup:
 - **Bee (192.168.50.3)**: Linux NixOS server
 - **Mini (192.168.50.4)**: macOS with nix-darwin
 
-Pod-service uses **port 8083** (sequential to podsync's 8082).
+Podservice uses **port 8083** (sequential to podsync's 8082).
 
 ## Deployment Options
 
 ### Option 1: Using Nix Flake (Recommended)
 
-1. **Add pod-service to your flake inputs:**
+1. **Add podservice to your flake inputs:**
 
 ```nix
 # In your nixos-config/flake.nix
@@ -23,18 +23,18 @@ Pod-service uses **port 8083** (sequential to podsync's 8082).
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # ... other inputs
 
-    pod-service = {
-      url = "github:ivankovnatsky/pod-service";
+    podservice = {
+      url = "github:ivankovnatsky/podservice";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, pod-service, ... }: {
+  outputs = { self, nixpkgs, podservice, ... }: {
     # For NixOS (bee)
     nixosConfigurations.bee = nixpkgs.lib.nixosSystem {
       # ...
       modules = [
-        pod-service.nixosModules.default
+        podservice.nixosModules.default
         ./machines/bee/configuration.nix
       ];
     };
@@ -43,7 +43,7 @@ Pod-service uses **port 8083** (sequential to podsync's 8082).
     darwinConfigurations.mini = darwin.lib.darwinSystem {
       # ...
       modules = [
-        pod-service.darwinModules.default
+        podservice.darwinModules.default
         ./machines/mini/configuration.nix
       ];
     };
@@ -53,20 +53,20 @@ Pod-service uses **port 8083** (sequential to podsync's 8082).
 
 2. **Configure the service:**
 
-Create `machines/mini/darwin/server/pod-service/default.nix`:
+Create `machines/mini/darwin/server/podservice/default.nix`:
 
 ```nix
 { config, pkgs, ... }:
 
 {
-  services.pod-service = {
+  services.podservice = {
     enable = true;
     port = 8083;
     host = "0.0.0.0";
     baseUrl = "http://192.168.50.4:8083";
 
-    dataDir = "/Volumes/Storage/Data/pod-service";
-    audioDir = "/Volumes/Storage/Data/pod-service/audio";
+    dataDir = "/Volumes/Storage/Data/podservice";
+    audioDir = "/Volumes/Storage/Data/podservice/audio";
 
     podcast = {
       title = "My YouTube Podcast";
@@ -78,7 +78,7 @@ Create `machines/mini/darwin/server/pod-service/default.nix`:
 
     watch = {
       enabled = true;
-      file = "/Volumes/Storage/Data/pod-service/urls.txt";
+      file = "/Volumes/Storage/Data/podservice/urls.txt";
     };
 
     logLevel = "INFO";
@@ -92,7 +92,7 @@ Create `machines/mini/darwin/server/pod-service/default.nix`:
 # machines/mini/darwin/configuration.nix
 {
   imports = [
-    ./server/pod-service
+    ./server/podservice
     # ... other imports
   ];
 }
@@ -105,7 +105,7 @@ If not using a flake input, you can import directly:
 ```nix
 {
   imports = [
-    /Users/ivan/Sources/github.com/ivankovnatsky/pod-service/nix/service.nix
+    /Users/ivan/Sources/github.com/ivankovnatsky/podservice/nix/service.nix
   ];
 }
 ```
@@ -118,10 +118,10 @@ Simply add YouTube URLs to the watched file, one per line:
 
 ```bash
 # macOS
-echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /Volumes/Storage/Data/Tmp/Pod-Service/Urls.txt
+echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /Volumes/Storage/Data/Media/Podservice/urls.txt
 
 # Linux
-echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /var/lib/pod-service/Urls.txt
+echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /var/lib/podservice/urls.txt
 ```
 
 The service will:
@@ -148,38 +148,38 @@ The service will:
 
 ```bash
 # Check status
-sudo systemctl status pod-service
+sudo systemctl status podservice
 
 # View logs
-sudo journalctl -u pod-service -f
+sudo journalctl -u podservice -f
 
 # Restart service
-sudo systemctl restart pod-service
+sudo systemctl restart podservice
 ```
 
 ### nix-darwin (mini)
 
 ```bash
 # Check status
-sudo launchctl list | grep pod-service
+sudo launchctl list | grep podservice
 
 # View logs
-tail -f /Volumes/Storage/Data/pod-service/pod-service.out.log
+tail -f /Volumes/Storage/Data/podservice/podservice.out.log
 
 # Restart service
-sudo launchctl kickstart -k system/pod-service
+sudo launchctl kickstart -k system/podservice
 ```
 
 ## Directory Structure
 
 ```
-/Volumes/Storage/Data/Tmp/Pod-Service/  # or /var/lib/pod-service/
-├── Audio/                              # Downloaded MP3 files
+/Volumes/Storage/Data/Media/Podservice/  # or /var/lib/podservice/
+├── audio/                               # Downloaded MP3 files
 │   └── *.mp3
-├── Metadata/                           # Episode metadata JSON files
+├── metadata/                            # Episode metadata JSON files
 │   └── *.json
-├── Urls.txt                            # URL queue (watched file)
-└── pod-service.*.log                  # Service logs (macOS)
+├── urls.txt                             # URL queue (watched file)
+└── podservice.*.log                     # Service logs (macOS)
 ```
 
 ## Troubleshooting
@@ -198,7 +198,7 @@ netstat -an | grep 8083
 
 ```bash
 # Enter the nix shell
-nix develop /Users/ivan/Sources/github.com/ivankovnatsky/pod-service
+nix develop /Users/ivan/Sources/github.com/ivankovnatsky/podservice
 
 # Run directly
 python -m pod_service info
@@ -210,7 +210,7 @@ Set `logLevel = "DEBUG"` in the service configuration and rebuild.
 
 ## Security Considerations
 
-- The service runs as a dedicated user/group (`pod-service`)
+- The service runs as a dedicated user/group (`podservice`)
 - Protected system directories (on NixOS)
 - Consider adding authentication if exposed publicly
 - Currently HTTP only - use reverse proxy (nginx/caddy) for HTTPS
