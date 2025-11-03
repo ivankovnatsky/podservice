@@ -7,11 +7,11 @@ serve:
 	@echo "Starting Pod Service..."
 	@echo "Feed URL: http://localhost:8083/feed.xml"
 	@echo "Add URLs to: ./data/urls.txt"
-	@nix develop --command python -m pod_service serve --config config.example.yaml
+	@nix develop --command python -m podservice serve --config config.example.yaml
 
 .PHONY: info
 info:
-	@nix develop --command python -m pod_service info --config config.example.yaml
+	@nix develop --command python -m podservice info --config config.example.yaml
 
 .PHONY: clean
 clean:

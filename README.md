@@ -137,7 +137,7 @@ For production deployment on NixOS or nix-darwin, see [DEPLOYMENT.md](DEPLOYMENT
 ## Project Structure
 
 ```
-pod_service/
+podservice/
 ├── __init__.py       # Package initialization
 ├── __main__.py       # Module entry point
 ├── cli.py            # CLI interface
