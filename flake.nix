@@ -64,7 +64,7 @@
 
         # Package the service
         packages.default = pkgs.python312Packages.buildPythonApplication {
-          pname = "pod-service";
+          pname = "podservice";
           version = "0.1.0";
 
           src = ./.;
@@ -73,7 +73,7 @@
 
           meta = with pkgs.lib; {
             description = "YouTube to Podcast Feed Service";
-            homepage = "https://github.com/ivankovnatsky/pod-service";
+            homepage = "https://github.com/ivankovnatsky/podservice";
             license = licenses.mit;
           };
         };

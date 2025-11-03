@@ -3,10 +3,10 @@
 with lib;
 
 let
-  cfg = config.services.pod-service;
+  cfg = config.services.podservice;
 
   # Build the config file
-  configFile = pkgs.writeText "pod-service-config.yaml" (builtins.toJSON {
+  configFile = pkgs.writeText "podservice-config.yaml" (builtins.toJSON {
     server = {
       port = cfg.port;
       host = cfg.host;
@@ -31,7 +31,7 @@ let
     log_level = cfg.logLevel;
   });
 
-  # Python environment with pod-service
+  # Python environment with podservice
   pythonEnv = pkgs.python312.withPackages (ps: with ps; [
     flask
     watchdog
@@ -43,7 +43,7 @@ let
 
 in
 {
-  options.services.pod-service = {
+  options.services.podservice = {
     enable = mkEnableOption "Pod Service - YouTube to Podcast Feed Service";
 
     port = mkOption {
@@ -66,13 +66,13 @@ in
 
     dataDir = mkOption {
       type = types.str;
-      default = "/var/lib/pod-service";
+      default = "/var/lib/podservice";
       description = "Base data directory";
     };
 
     audioDir = mkOption {
       type = types.str;
-      default = "/var/lib/pod-service/audio";
+      default = "/var/lib/podservice/audio";
       description = "Audio files directory";
     };
 
@@ -123,7 +123,7 @@ in
 
       file = mkOption {
         type = types.str;
-        default = "/var/lib/pod-service/urls.txt";
+        default = "/var/lib/podservice/urls.txt";
         description = "File to watch for YouTube URLs";
       };
     };
@@ -136,13 +136,13 @@ in
 
     user = mkOption {
       type = types.str;
-      default = "pod-service";
+      default = "podservice";
       description = "User to run the service as";
     };
 
     group = mkOption {
       type = types.str;
-      default = "pod-service";
+      default = "podservice";
       description = "Group to run the service as";
     };
   };
@@ -160,7 +160,7 @@ in
     users.groups.${cfg.group} = { };
 
     # Systemd service (for NixOS)
-    systemd.services.pod-service = mkIf pkgs.stdenv.isLinux {
+    systemd.services.podservice = mkIf pkgs.stdenv.isLinux {
       description = "Pod Service - YouTube to Podcast Feed";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
@@ -186,7 +186,7 @@ in
         # Ensure directories exist
         mkdir -p ${cfg.dataDir}
         mkdir -p ${cfg.audioDir}
-        mkdir -p ${cfg.dataDir}/Metadata
+        mkdir -p ${cfg.dataDir}/metadata
 
         # Create watch file if it doesn't exist
         if [ ! -f ${cfg.watch.file} ]; then
@@ -199,7 +199,7 @@ in
     };
 
     # Launchd service (for macOS/nix-darwin)
-    launchd.daemons.pod-service = mkIf pkgs.stdenv.isDarwin {
+    launchd.daemons.podservice = mkIf pkgs.stdenv.isDarwin {
       serviceConfig = {
         ProgramArguments = [
           "${pythonEnv}/bin/python"
@@ -211,8 +211,8 @@ in
         ];
         KeepAlive = true;
         RunAtLoad = true;
-        StandardErrorPath = "${cfg.dataDir}/pod-service.error.log";
-        StandardOutPath = "${cfg.dataDir}/pod-service.out.log";
+        StandardErrorPath = "${cfg.dataDir}/podservice.error.log";
+        StandardOutPath = "${cfg.dataDir}/podservice.out.log";
         WorkingDirectory = cfg.dataDir;
       };
     };

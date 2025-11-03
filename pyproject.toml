@@ -1,5 +1,5 @@
 [project]
-name = "pod-service"
+name = "podservice"
 version = "0.1.0"
 description = "YouTube to Podcast Feed Service"
 readme = "README.md"
@@ -19,23 +19,23 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ivankovnatsky/pod-service"
+Homepage = "https://github.com/ivankovnatsky/podservice"
 
 [project.scripts]
-pod-service = "pod_service.cli:main"
+podservice = "pod_service.cli:main"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
-name = "pod-service"
+name = "podservice"
 version = "0.1.0"
 description = "YouTube to Podcast Feed Service"
 authors = ["Ivan Kovnatsky"]
 readme = "README.md"
 license = "MIT"
-homepage = "https://github.com/ivankovnatsky/pod-service"
+homepage = "https://github.com/ivankovnatsky/podservice"
 
 [tool.poetry.dependencies]
 python = ">=3.8"
@@ -50,7 +50,7 @@ click = "*"
 pytest = "*"
 
 [tool.poetry.scripts]
-pod-service = "pod_service.cli:main"
+podservice = "pod_service.cli:main"
 
 [tool.setuptools]
 packages = ["pod_service"]

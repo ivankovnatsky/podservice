@@ -1,4 +1,4 @@
-"""CLI entry point for pod-service."""
+"""CLI entry point for podservice."""
 
 import logging
 import sys
@@ -83,7 +83,7 @@ def init_config():
     print(f"  Watch file: {config.watch.file}")
     print(f"  Audio directory: {config.storage.audio_dir}")
     print("\nEdit the config file to customize settings.")
-    print(f"\nTo start the service, run: pod-service serve")
+    print(f"\nTo start the service, run: podservice serve")
 
 
 # Click-based CLI (preferred)
