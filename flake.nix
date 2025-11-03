@@ -36,8 +36,28 @@
         # Python environment with all dependencies
         pythonEnv = pkgs.python312.withPackages pythonPackages;
 
+        # Package the service
+        podservicePackage = pkgs.python312Packages.buildPythonApplication {
+          pname = "podservice";
+          version = "0.1.0";
+
+          src = ./.;
+
+          propagatedBuildInputs = pythonPackages pkgs.python312Packages;
+
+          meta = with pkgs.lib; {
+            description = "YouTube to Podcast Feed Service";
+            homepage = "https://github.com/ivankovnatsky/podservice";
+            license = licenses.mit;
+          };
+        };
       in
       {
+        packages = {
+          podservice = podservicePackage;
+          default = podservicePackage;
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             pythonEnv
@@ -60,22 +80,6 @@
             echo "  python -m pod_service info   - Show service info"
             echo ""
           '';
-        };
-
-        # Package the service
-        packages.default = pkgs.python312Packages.buildPythonApplication {
-          pname = "podservice";
-          version = "0.1.0";
-
-          src = ./.;
-
-          propagatedBuildInputs = pythonPackages pkgs.python312Packages;
-
-          meta = with pkgs.lib; {
-            description = "YouTube to Podcast Feed Service";
-            homepage = "https://github.com/ivankovnatsky/podservice";
-            license = licenses.mit;
-          };
         };
       }
     );
