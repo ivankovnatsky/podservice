@@ -40,10 +40,15 @@
         podservicePackage = pkgs.python312Packages.buildPythonApplication {
           pname = "podservice";
           version = "0.1.0";
+          pyproject = true;
 
           src = ./.;
 
-          propagatedBuildInputs = pythonPackages pkgs.python312Packages;
+          build-system = with pkgs.python312Packages; [
+            poetry-core
+          ];
+
+          dependencies = pythonPackages pkgs.python312Packages;
 
           meta = with pkgs.lib; {
             description = "YouTube to Podcast Feed Service";
