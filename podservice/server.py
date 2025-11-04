@@ -41,7 +41,7 @@ class PodcastServer:
             return f"""
             <html>
             <head>
-                <title>Pod Service</title>
+                <title>Podservice</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
                     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }}
@@ -71,7 +71,7 @@ class PodcastServer:
                 </style>
             </head>
             <body>
-                <h1>Pod Service</h1>
+                <h1>Podservice</h1>
                 <p>YouTube to Podcast Feed Service</p>
 
                 {message}
@@ -79,7 +79,7 @@ class PodcastServer:
                 <div class="links">
                     <h2>Links</h2>
                     <ul>
-                        <li><a href="/feed.xml">📡 Podcast Feed (RSS)</a></li>
+                        <li><a href="/feed.xml">📡 Podcast Feed</a></li>
                         <li><a href="/audio">🎵 Audio Files</a></li>
                     </ul>
                 </div>
