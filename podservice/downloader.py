@@ -1,5 +1,6 @@
 """YouTube downloader using yt-dlp."""
 
+import json
 import logging
 import os
 import re
@@ -48,6 +49,32 @@ class YouTubeDownloader:
         """
         try:
             logger.info(f"Downloading: {url}")
+
+            # First, check if this video was already downloaded
+            # by checking if metadata exists for this URL
+            for metadata_file in self.metadata_dir.glob("*.json"):
+                try:
+                    with open(metadata_file, 'r') as f:
+                        data = json.load(f)
+                        if data.get('youtube_url') == url:
+                            logger.info(f"Video already downloaded, loading existing episode: {data.get('title', 'Unknown')}")
+                            # Return the existing episode so URL gets removed from file
+                            audio_file = data.get('audio_file', '')
+                            if audio_file and Path(audio_file).exists():
+                                filename = Path(audio_file).name
+                                audio_url = f"{self.base_url}/audio/{quote(filename)}"
+                                return Episode(
+                                    title=data.get('title', 'Untitled'),
+                                    description=data.get('description', ''),
+                                    audio_file=audio_file,
+                                    audio_url=audio_url,
+                                    pub_date=datetime.fromisoformat(data.get('pub_date', datetime.now().isoformat())),
+                                    duration=data.get('duration', 0),
+                                    file_size=data.get('file_size', 0),
+                                    youtube_url=url,
+                                )
+                except Exception:
+                    continue
 
             # Configure yt-dlp options
             ydl_opts = {
