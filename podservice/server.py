@@ -247,12 +247,13 @@ class PodcastServer:
                 if not filename:
                     return redirect("/episodes?error=No filename provided")
 
-                # Security: prevent path traversal
-                if ".." in filename or "/" in filename or "\\" in filename:
+                # Security: prevent path traversal by ensuring no directory separators
+                # and that the filename is just a basename (no path components)
+                if "/" in filename or "\\" in filename or filename != os.path.basename(filename):
                     return redirect("/episodes?error=Invalid filename")
 
                 audio_dir = Path(self.config.storage.audio_dir)
-                metadata_dir = Path(self.config.storage.metadata_dir)
+                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
 
                 # Delete audio file
                 audio_file = audio_dir / filename
