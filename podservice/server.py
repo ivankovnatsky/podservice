@@ -44,7 +44,7 @@ class PodcastServer:
                 <title>Podservice</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
-                    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }}
+                    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background-color: #fff; color: #333; }}
                     h1 {{ color: #333; }}
                     .links {{ margin: 30px 0; }}
                     .links ul {{ list-style: none; padding: 0; }}
@@ -53,9 +53,20 @@ class PodcastServer:
                     .links a:hover {{ text-decoration: underline; }}
                     .form-group {{ margin: 40px 0 20px 0; padding-top: 30px; border-top: 1px solid #eee; }}
                     .input-wrapper {{ position: relative; display: flex; gap: 10px; }}
-                    input[type="text"] {{ flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }}
+                    input[type="text"] {{ flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; }}
                     button {{ background-color: #007bff; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }}
                     button:hover {{ background-color: #0056b3; }}
+
+                    /* Dark mode */
+                    @media (prefers-color-scheme: dark) {{
+                        body {{ background-color: #1a1a1a; color: #e0e0e0; }}
+                        h1, h2 {{ color: #e0e0e0; }}
+                        .links a {{ color: #4a9eff; }}
+                        .form-group {{ border-top-color: #333; }}
+                        input[type="text"] {{ background-color: #2a2a2a; color: #e0e0e0; border-color: #444; }}
+                        button {{ background-color: #0d6efd; }}
+                        button:hover {{ background-color: #0b5ed7; }}
+                    }}
 
                     /* Mobile styles */
                     @media (max-width: 768px) {{
@@ -165,7 +176,23 @@ class PodcastServer:
             try:
                 audio_dir = Path(self.config.storage.audio_dir)
                 if not audio_dir.exists():
-                    return "<html><body><h1>Episodes</h1><p>No episodes yet.</p></body></html>"
+                    return """
+                    <html>
+                    <head>
+                        <title>Episodes</title>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; background-color: #fff; color: #333; }
+                            h1 { color: #333; }
+                            @media (prefers-color-scheme: dark) {
+                                body { background-color: #1a1a1a; color: #e0e0e0; }
+                                h1 { color: #e0e0e0; }
+                            }
+                        </style>
+                    </head>
+                    <body><h1>Episodes</h1><p>No episodes yet.</p></body>
+                    </html>
+                    """
 
                 success = request.args.get("success")
                 error = request.args.get("error")
@@ -194,8 +221,23 @@ class PodcastServer:
                 if not files:
                     return f"""
                     <html>
-                    <head><title>Episodes</title></head>
-                    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px;">
+                    <head>
+                        <title>Episodes</title>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; background-color: #fff; color: #333; }}
+                            h1 {{ color: #333; }}
+                            a {{ color: #007bff; text-decoration: none; }}
+                            a:hover {{ text-decoration: underline; }}
+
+                            @media (prefers-color-scheme: dark) {{
+                                body {{ background-color: #1a1a1a; color: #e0e0e0; }}
+                                h1 {{ color: #e0e0e0; }}
+                                a {{ color: #4a9eff; }}
+                            }}
+                        </style>
+                    </head>
+                    <body>
                         <h1>Episodes</h1>
                         <p><a href="/">&larr; Back</a></p>
                         {message}
@@ -211,11 +253,20 @@ class PodcastServer:
                     <title>Episodes</title>
                     <meta name="viewport" content="width=device-width, initial-scale=1.0">
                     <style>
-                        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; }}
+                        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; background-color: #fff; color: #333; }}
+                        h1 {{ color: #333; }}
                         ul {{ list-style: none; padding: 0; }}
                         a {{ color: #007bff; text-decoration: none; }}
                         a:hover {{ text-decoration: underline; }}
                         button:hover {{ background-color: #c82333 !important; }}
+
+                        /* Dark mode */
+                        @media (prefers-color-scheme: dark) {{
+                            body {{ background-color: #1a1a1a; color: #e0e0e0; }}
+                            h1 {{ color: #e0e0e0; }}
+                            a {{ color: #4a9eff; }}
+                            li span {{ color: #999 !important; }}
+                        }}
 
                         @media (max-width: 768px) {{
                             body {{ margin: 20px auto; padding: 15px; }}
