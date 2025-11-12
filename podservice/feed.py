@@ -158,6 +158,7 @@ class PodcastFeed:
             logger.debug(f"Metadata directory does not exist: {metadata_dir}")
             return
 
+        skipped = 0
         # Find all .json metadata files
         for json_file in metadata_path.glob("*.json"):
             try:
@@ -172,11 +173,18 @@ class PodcastFeed:
                 if audio_file:
                     audio_file = os.path.abspath(audio_file)
 
+                # Skip episode if audio file doesn't exist
+                if not audio_file or not os.path.exists(audio_file):
+                    logger.debug(
+                        f"Skipping episode with missing audio file: {data.get('title', 'Unknown')} - {audio_file}"
+                    )
+                    skipped += 1
+                    continue
+
                 # Always regenerate URL with current base_url from config
                 # This allows changing base_url without re-downloading
-                if audio_file and os.path.exists(audio_file):
-                    filename = os.path.basename(audio_file)
-                    audio_url = f"{self.base_url}/audio/{quote(filename)}"
+                filename = os.path.basename(audio_file)
+                audio_url = f"{self.base_url}/audio/{quote(filename)}"
 
                 # Create episode from metadata
                 episode = Episode(
@@ -195,6 +203,8 @@ class PodcastFeed:
             except Exception as e:
                 logger.error(f"Error loading metadata from {json_file}: {e}")
 
+        if skipped > 0:
+            logger.info(f"Skipped {skipped} episode(s) with missing audio files")
         logger.info(f"Loaded {len(self.episodes)} episodes from metadata")
 
 
