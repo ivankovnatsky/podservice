@@ -80,7 +80,7 @@ class PodcastServer:
                     <h2>Links</h2>
                     <ul>
                         <li><a href="/feed.xml">📡 Podcast Feed</a></li>
-                        <li><a href="/audio">🎵 Audio Files</a></li>
+                        <li><a href="/episodes">🎵 Episodes</a></li>
                     </ul>
                 </div>
 
@@ -159,32 +159,75 @@ class PodcastServer:
                 logger.error(f"Error serving audio file {filename}: {e}", exc_info=True)
                 return Response("File not found", status=404)
 
-        @self.app.route("/audio")
-        def audio_list():
-            """List available audio files."""
+        @self.app.route("/episodes")
+        def episodes_list():
+            """List available episodes."""
             try:
                 audio_dir = Path(self.config.storage.audio_dir)
                 if not audio_dir.exists():
-                    return "<html><body><h1>Audio Files</h1><p>No audio files yet.</p></body></html>"
+                    return "<html><body><h1>Episodes</h1><p>No episodes yet.</p></body></html>"
+
+                success = request.args.get("success")
+                error = request.args.get("error")
+
+                message = ""
+                if success:
+                    message = '<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin: 15px 0;">✓ Episode deleted successfully</div>'
+                elif error:
+                    message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin: 15px 0;">✗ Error: {error}</div>'
 
                 files = []
                 for file in sorted(audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
                     if file.is_file() and file.suffix in [".mp3", ".m4a", ".wav"]:
                         size_mb = file.stat().st_size / (1024 * 1024)
                         files.append(
-                            f'<li><a href="/audio/{file.name}">{file.name}</a> ({size_mb:.1f} MB)</li>'
+                            f'''<li style="margin: 15px 0; display: flex; align-items: center; gap: 10px;">
+                                <a href="/audio/{file.name}" style="flex: 1;">{file.name}</a>
+                                <span style="color: #666;">({size_mb:.1f} MB)</span>
+                                <form method="POST" action="/delete-episode" style="margin: 0;" onsubmit="return confirm('Delete this episode? This cannot be undone.');">
+                                    <input type="hidden" name="filename" value="{file.name}">
+                                    <button type="submit" style="background-color: #dc3545; color: white; padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">Delete</button>
+                                </form>
+                            </li>'''
                         )
 
                 if not files:
-                    return "<html><body><h1>Audio Files</h1><p>No audio files yet.</p></body></html>"
+                    return f"""
+                    <html>
+                    <head><title>Episodes</title></head>
+                    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px;">
+                        <h1>Episodes</h1>
+                        <p><a href="/">&larr; Back</a></p>
+                        {message}
+                        <p>No episodes yet.</p>
+                    </body>
+                    </html>
+                    """
 
                 files_html = "\n".join(files)
                 return f"""
                 <html>
-                <head><title>Audio Files</title></head>
+                <head>
+                    <title>Episodes</title>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <style>
+                        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; }}
+                        ul {{ list-style: none; padding: 0; }}
+                        a {{ color: #007bff; text-decoration: none; }}
+                        a:hover {{ text-decoration: underline; }}
+                        button:hover {{ background-color: #c82333 !important; }}
+
+                        @media (max-width: 768px) {{
+                            body {{ margin: 20px auto; padding: 15px; }}
+                            li {{ flex-direction: column !important; align-items: flex-start !important; }}
+                            li span {{ margin-left: 0 !important; }}
+                        }}
+                    </style>
+                </head>
                 <body>
-                    <h1>Audio Files</h1>
+                    <h1>Episodes</h1>
                     <p><a href="/">&larr; Back</a></p>
+                    {message}
                     <ul>
                     {files_html}
                     </ul>
@@ -192,8 +235,46 @@ class PodcastServer:
                 </html>
                 """
             except Exception as e:
-                logger.error(f"Error listing audio files: {e}", exc_info=True)
+                logger.error(f"Error listing episodes: {e}", exc_info=True)
                 return Response("Error listing files", status=500)
+
+        @self.app.route("/delete-episode", methods=["POST"])
+        def delete_episode():
+            """Delete an episode (audio file and metadata)."""
+            try:
+                filename = request.form.get("filename", "").strip()
+
+                if not filename:
+                    return redirect("/episodes?error=No filename provided")
+
+                # Security: prevent path traversal
+                if ".." in filename or "/" in filename or "\\" in filename:
+                    return redirect("/episodes?error=Invalid filename")
+
+                audio_dir = Path(self.config.storage.audio_dir)
+                metadata_dir = Path(self.config.storage.metadata_dir)
+
+                # Delete audio file
+                audio_file = audio_dir / filename
+                if audio_file.exists():
+                    audio_file.unlink()
+                    logger.info(f"Deleted audio file: {filename}")
+
+                # Delete corresponding metadata file
+                metadata_file = metadata_dir / f"{audio_file.stem}.json"
+                if metadata_file.exists():
+                    metadata_file.unlink()
+                    logger.info(f"Deleted metadata file: {metadata_file.name}")
+
+                # Reload episodes from metadata to update the feed
+                self.feed.episodes.clear()
+                self.feed.load_episodes_from_metadata(str(metadata_dir))
+
+                return redirect("/episodes?success=1")
+
+            except Exception as e:
+                logger.error(f"Error deleting episode: {e}", exc_info=True)
+                return redirect(f"/episodes?error={str(e)}")
 
     def start(self):
         """Start the server in a separate thread."""
