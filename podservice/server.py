@@ -142,6 +142,18 @@ class PodcastServer:
                 if not os.path.exists(audio_dir):
                     return Response("Audio directory not found", status=404)
 
+                # Check if file exists before trying to serve it
+                file_path = os.path.join(audio_dir, filename)
+                if not os.path.exists(file_path):
+                    logger.warning(
+                        f"Audio file not found (may have been deleted or cached in client): {filename}"
+                    )
+                    return Response(
+                        "Episode no longer available",
+                        status=410,  # 410 Gone = permanently removed
+                        mimetype="text/plain"
+                    )
+
                 return send_from_directory(audio_dir, filename)
             except Exception as e:
                 logger.error(f"Error serving audio file {filename}: {e}", exc_info=True)
