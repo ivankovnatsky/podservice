@@ -29,6 +29,7 @@
             pyyaml
             requests
             click
+            pillow
             # Development & Testing
             pytest
           ];

@@ -36,9 +36,10 @@ class StorageConfig:
 
     data_dir: str = "/tmp/podservice"
     audio_dir: Optional[str] = None
+    thumbnails_dir: Optional[str] = None
 
     def __post_init__(self):
-        """Set audio_dir if not provided and resolve to absolute paths."""
+        """Set audio_dir and thumbnails_dir if not provided and resolve to absolute paths."""
         # Convert to absolute paths
         self.data_dir = os.path.abspath(os.path.expanduser(self.data_dir))
 
@@ -46,6 +47,11 @@ class StorageConfig:
             self.audio_dir = os.path.join(self.data_dir, "audio")
         else:
             self.audio_dir = os.path.abspath(os.path.expanduser(self.audio_dir))
+
+        if self.thumbnails_dir is None:
+            self.thumbnails_dir = os.path.join(self.data_dir, "thumbnails")
+        else:
+            self.thumbnails_dir = os.path.abspath(os.path.expanduser(self.thumbnails_dir))
 
 
 @dataclass
@@ -157,6 +163,7 @@ def save_config(config: ServiceConfig, config_path: Optional[str] = None) -> Non
         "storage": {
             "data_dir": config.storage.data_dir,
             "audio_dir": config.storage.audio_dir,
+            "thumbnails_dir": config.storage.thumbnails_dir,
         },
         "watch": {
             "file": config.watch.file,

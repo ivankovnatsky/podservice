@@ -170,6 +170,25 @@ class PodcastServer:
                 logger.error(f"Error serving audio file {filename}: {e}", exc_info=True)
                 return Response("File not found", status=404)
 
+        @self.app.route("/thumbnails/<path:filename>")
+        def thumbnail_file(filename):
+            """Serve thumbnail images."""
+            try:
+                thumbnails_dir = self.config.storage.thumbnails_dir
+                if not os.path.exists(thumbnails_dir):
+                    return Response("Thumbnails directory not found", status=404)
+
+                # Check if file exists before trying to serve it
+                file_path = os.path.join(thumbnails_dir, filename)
+                if not os.path.exists(file_path):
+                    logger.warning(f"Thumbnail not found: {filename}")
+                    return Response("Thumbnail not found", status=404, mimetype="text/plain")
+
+                return send_from_directory(thumbnails_dir, filename)
+            except Exception as e:
+                logger.error(f"Error serving thumbnail {filename}: {e}", exc_info=True)
+                return Response("File not found", status=404)
+
         @self.app.route("/episodes")
         def episodes_list():
             """List available episodes."""
@@ -203,14 +222,31 @@ class PodcastServer:
                 elif error:
                     message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin: 15px 0;">✗ Error: {error}</div>'
 
+                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                thumbnails_dir = Path(self.config.storage.thumbnails_dir)
+
                 files = []
                 for file in sorted(audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
                     if file.is_file() and file.suffix in [".mp3", ".m4a", ".wav"]:
                         size_mb = file.stat().st_size / (1024 * 1024)
+
+                        # Try to find thumbnail (prefer JPEG first for compatibility)
+                        thumbnail_html = ""
+                        for ext in ['.jpg', '.jpeg', '.webp', '.png']:
+                            thumb_file = thumbnails_dir / f"{file.stem}{ext}"
+                            if thumb_file.exists():
+                                thumbnail_html = f'<img src="/thumbnails/{thumb_file.name}" alt="" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px;">'
+                                break
+
+                        # Fallback placeholder if no thumbnail
+                        if not thumbnail_html:
+                            thumbnail_html = '<div class="thumbnail-placeholder" style="width: 60px; height: 60px; background-color: #ddd; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 24px;">🎵</div>'
+
                         files.append(
-                            f'''<li style="margin: 15px 0; display: flex; align-items: center; gap: 10px;">
-                                <a href="/audio/{file.name}" style="flex: 1;">{file.name}</a>
-                                <span style="color: #666;">({size_mb:.1f} MB)</span>
+                            f'''<li style="margin: 15px 0; display: flex; align-items: center; gap: 12px;">
+                                {thumbnail_html}
+                                <a href="/audio/{file.name}" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{file.name}</a>
+                                <span style="color: #666; white-space: nowrap;">({size_mb:.1f} MB)</span>
                                 <form method="POST" action="/delete-episode" style="margin: 0;" onsubmit="return confirm('Delete this episode? This cannot be undone.');">
                                     <input type="hidden" name="filename" value="{file.name}">
                                     <button type="submit" style="background-color: #dc3545; color: white; padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">Delete</button>
@@ -259,6 +295,7 @@ class PodcastServer:
                         a {{ color: #007bff; text-decoration: none; }}
                         a:hover {{ text-decoration: underline; }}
                         button:hover {{ background-color: #c82333 !important; }}
+                        img {{ border: 1px solid #e0e0e0; }}
 
                         /* Dark mode */
                         @media (prefers-color-scheme: dark) {{
@@ -266,12 +303,14 @@ class PodcastServer:
                             h1 {{ color: #e0e0e0; }}
                             a {{ color: #4a9eff; }}
                             li span {{ color: #999 !important; }}
+                            img {{ border-color: #333; }}
+                            .thumbnail-placeholder {{ background-color: #333 !important; }}
                         }}
 
                         @media (max-width: 768px) {{
                             body {{ margin: 20px auto; padding: 15px; }}
-                            li {{ flex-direction: column !important; align-items: flex-start !important; }}
-                            li span {{ margin-left: 0 !important; }}
+                            li {{ flex-wrap: wrap !important; }}
+                            li img, li .thumbnail-placeholder {{ width: 50px !important; height: 50px !important; }}
                         }}
                     </style>
                 </head>
@@ -305,6 +344,7 @@ class PodcastServer:
 
                 audio_dir = Path(self.config.storage.audio_dir)
                 metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                thumbnails_dir = Path(self.config.storage.thumbnails_dir)
 
                 # Delete audio file
                 audio_file = audio_dir / filename
@@ -317,6 +357,14 @@ class PodcastServer:
                 if metadata_file.exists():
                     metadata_file.unlink()
                     logger.info(f"Deleted metadata file: {metadata_file.name}")
+
+                # Delete corresponding thumbnail (check for common extensions)
+                for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                    thumbnail_file = thumbnails_dir / f"{audio_file.stem}{ext}"
+                    if thumbnail_file.exists():
+                        thumbnail_file.unlink()
+                        logger.info(f"Deleted thumbnail file: {thumbnail_file.name}")
+                        break
 
                 # Reload episodes from metadata to update the feed
                 self.feed.episodes.clear()

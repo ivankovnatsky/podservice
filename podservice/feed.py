@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from xml.etree import ElementTree as ET
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ class Episode:
         duration: int = 0,
         file_size: int = 0,
         youtube_url: str = "",
+        image_url: str = "",
     ):
         self.title = title
         self.description = description
@@ -34,6 +35,7 @@ class Episode:
         self.duration = duration
         self.file_size = file_size
         self.youtube_url = youtube_url
+        self.image_url = image_url
         self.guid = youtube_url or audio_url
 
 
@@ -137,6 +139,11 @@ class PodcastFeed:
             if episode.youtube_url:
                 ET.SubElement(item, "link").text = episode.youtube_url
 
+            # Episode image
+            if episode.image_url:
+                image = ET.SubElement(item, "itunes:image")
+                image.set("href", episode.image_url)
+
         # Convert to string with proper formatting
         ET.indent(rss, space="  ")
         xml_str = ET.tostring(rss, encoding="unicode", method="xml")
@@ -186,6 +193,15 @@ class PodcastFeed:
                 filename = os.path.basename(audio_file)
                 audio_url = f"{self.base_url}/audio/{quote(filename)}"
 
+                # Regenerate image URL with current base_url if thumbnail exists
+                image_url = ""
+                stored_image_url = data.get("image_url", "")
+                if stored_image_url:
+                    # Extract just the filename from stored URL and unquote it first
+                    # to avoid double-encoding
+                    image_filename = unquote(stored_image_url.split('/')[-1])
+                    image_url = f"{self.base_url}/thumbnails/{quote(image_filename)}"
+
                 # Create episode from metadata
                 episode = Episode(
                     title=data.get("title", "Untitled"),
@@ -196,6 +212,7 @@ class PodcastFeed:
                     duration=data.get("duration", 0),
                     file_size=data.get("file_size", 0),
                     youtube_url=data.get("youtube_url", ""),
+                    image_url=image_url,
                 )
 
                 self.add_episode(episode)
@@ -219,6 +236,7 @@ def save_episode_metadata(episode: Episode, metadata_file: str):
         "duration": episode.duration,
         "file_size": episode.file_size,
         "youtube_url": episode.youtube_url,
+        "image_url": episode.image_url,
     }
 
     os.makedirs(os.path.dirname(metadata_file), exist_ok=True)

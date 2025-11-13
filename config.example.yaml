@@ -29,6 +29,9 @@ storage:
   # Audio files directory (defaults to data_dir/audio if not set)
   audio_dir: "./data/audio"
 
+  # Thumbnails directory (defaults to data_dir/thumbnails if not set)
+  # thumbnails_dir: "./data/thumbnails"
+
 watch:
   # Enable file watching
   enabled: true
