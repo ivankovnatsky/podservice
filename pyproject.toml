@@ -16,6 +16,7 @@ dependencies = [
     "PyYAML",
     "requests",
     "click",
+    "Pillow",
 ]
 
 [project.urls]
@@ -45,6 +46,7 @@ yt-dlp = "*"
 PyYAML = "*"
 requests = "*"
 click = "*"
+Pillow = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"

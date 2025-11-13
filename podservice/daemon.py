@@ -55,6 +55,7 @@ class PodService:
             output_dir=self.config.storage.audio_dir,
             base_url=self.config.server.base_url,
             metadata_dir=str(self.metadata_dir),
+            thumbnails_dir=self.config.storage.thumbnails_dir,
         )
 
         # Initialize server
