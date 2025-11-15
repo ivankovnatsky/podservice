@@ -296,6 +296,9 @@ class PodcastServer:
                         a:hover {{ text-decoration: underline; }}
                         button:hover {{ background-color: #c82333 !important; }}
                         img {{ border: 1px solid #e0e0e0; }}
+                        .header-controls {{ display: flex; justify-content: space-between; align-items: center; margin: 15px 0; }}
+                        .delete-all-btn {{ background-color: #dc3545; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }}
+                        .delete-all-btn:hover {{ background-color: #c82333; }}
 
                         /* Dark mode */
                         @media (prefers-color-scheme: dark) {{
@@ -311,12 +314,19 @@ class PodcastServer:
                             body {{ margin: 20px auto; padding: 15px; }}
                             li {{ flex-wrap: wrap !important; }}
                             li img, li .thumbnail-placeholder {{ width: 50px !important; height: 50px !important; }}
+                            .header-controls {{ flex-direction: column; gap: 10px; align-items: flex-start; }}
+                            .delete-all-btn {{ width: 100%; }}
                         }}
                     </style>
                 </head>
                 <body>
                     <h1>Episodes</h1>
-                    <p><a href="/">&larr; Back</a></p>
+                    <div class="header-controls">
+                        <p style="margin: 0;"><a href="/">&larr; Back</a></p>
+                        <form method="POST" action="/delete-all-episodes" style="margin: 0;" onsubmit="return confirm('Delete ALL episodes? This cannot be undone!');">
+                            <button type="submit" class="delete-all-btn">Delete All Episodes</button>
+                        </form>
+                    </div>
                     {message}
                     <ul>
                     {files_html}
@@ -374,6 +384,48 @@ class PodcastServer:
 
             except Exception as e:
                 logger.error(f"Error deleting episode: {e}", exc_info=True)
+                return redirect(f"/episodes?error={str(e)}")
+
+        @self.app.route("/delete-all-episodes", methods=["POST"])
+        def delete_all_episodes():
+            """Delete all episodes (audio files, metadata, and thumbnails)."""
+            try:
+                audio_dir = Path(self.config.storage.audio_dir)
+                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                thumbnails_dir = Path(self.config.storage.thumbnails_dir)
+
+                deleted_count = 0
+
+                # Delete all audio files
+                if audio_dir.exists():
+                    for audio_file in audio_dir.glob("*"):
+                        if audio_file.is_file() and audio_file.suffix in [".mp3", ".m4a", ".wav"]:
+                            audio_file.unlink()
+                            logger.info(f"Deleted audio file: {audio_file.name}")
+                            deleted_count += 1
+
+                # Delete all metadata files
+                if metadata_dir.exists():
+                    for metadata_file in metadata_dir.glob("*.json"):
+                        if metadata_file.is_file():
+                            metadata_file.unlink()
+                            logger.info(f"Deleted metadata file: {metadata_file.name}")
+
+                # Delete all thumbnail files
+                if thumbnails_dir.exists():
+                    for thumbnail_file in thumbnails_dir.glob("*"):
+                        if thumbnail_file.is_file() and thumbnail_file.suffix in [".jpg", ".jpeg", ".png", ".webp"]:
+                            thumbnail_file.unlink()
+                            logger.info(f"Deleted thumbnail file: {thumbnail_file.name}")
+
+                # Clear all episodes from the feed
+                self.feed.episodes.clear()
+
+                logger.info(f"Deleted all episodes (total: {deleted_count})")
+                return redirect("/episodes?success=1")
+
+            except Exception as e:
+                logger.error(f"Error deleting all episodes: {e}", exc_info=True)
                 return redirect(f"/episodes?error={str(e)}")
 
     def start(self):
