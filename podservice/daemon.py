@@ -181,7 +181,18 @@ def run_service(config_path: str = None, foreground: bool = True):
     log_level = getattr(logging, config.log_level.upper(), logging.INFO)
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
-    handlers = [logging.StreamHandler()]
+    # Configure stdout handler for INFO and below
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.DEBUG)
+    stdout_handler.setFormatter(logging.Formatter(log_format))
+    stdout_handler.addFilter(lambda record: record.levelno <= logging.INFO)
+
+    # Configure stderr handler for WARNING and above
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setLevel(logging.WARNING)
+    stderr_handler.setFormatter(logging.Formatter(log_format))
+
+    handlers = [stdout_handler, stderr_handler]
 
     logging.basicConfig(level=log_level, format=log_format, handlers=handlers)
 
