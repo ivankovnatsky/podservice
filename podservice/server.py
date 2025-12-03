@@ -88,10 +88,15 @@ class PodcastServer:
                 {message}
 
                 <div class="links">
-                    <h2>Links</h2>
+                    <h2>Internal</h2>
                     <ul>
                         <li><a href="/feed.xml">📡 Podcast Feed</a></li>
                         <li><a href="/episodes">🎵 Episodes</a></li>
+                    </ul>
+
+                    <h2>External</h2>
+                    <ul>
+                        <li><a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer">YouTube</a></li>
                     </ul>
                 </div>
 
