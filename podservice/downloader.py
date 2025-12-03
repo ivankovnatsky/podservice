@@ -170,16 +170,9 @@ class YouTubeDownloader:
             logger.debug(f"Video title: {title}")
             description = info.get("description", "")
             duration = info.get("duration", 0)
-            upload_date_str = info.get("upload_date")
-
-            # Parse upload date
-            if upload_date_str:
-                try:
-                    pub_date = datetime.strptime(upload_date_str, "%Y%m%d")
-                except ValueError:
-                    pub_date = datetime.now()
-            else:
-                pub_date = datetime.now()
+            # Use current datetime for pub_date to ensure proper sorting
+            # YouTube only provides date (no time), so we use download time instead
+            pub_date = datetime.now()
 
             # Sanitize title for filename
             safe_title = sanitize_filename(title)
