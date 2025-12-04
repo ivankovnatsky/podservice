@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -11,27 +10,10 @@ from urllib.parse import quote
 
 import yt_dlp
 
-try:
-    from PIL import Image
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-    logger.warning("Pillow not installed, thumbnail conversion disabled")
-
 from .feed import Episode, save_episode_metadata
+from .utils import convert_thumbnail_to_jpeg, sanitize_filename
 
 logger = logging.getLogger(__name__)
-
-
-def sanitize_filename(filename: str) -> str:
-    """Sanitize filename to be filesystem-safe."""
-    # Remove or replace problematic characters
-    filename = re.sub(r'[<>:"/\\|?*]', "", filename)
-    # Replace multiple spaces with single space
-    filename = re.sub(r"\s+", " ", filename)
-    # Trim and limit length
-    filename = filename.strip()[:200]
-    return filename
 
 
 class YouTubeDownloader:
@@ -56,39 +38,7 @@ class YouTubeDownloader:
         Returns:
             Path to JPEG file, or original path if conversion fails/not needed
         """
-        if not HAS_PIL:
-            return thumbnail_path
-
-        try:
-            # Only convert if not already JPEG
-            if thumbnail_path.suffix.lower() in ['.jpg', '.jpeg']:
-                return thumbnail_path
-
-            jpeg_path = thumbnail_path.with_suffix('.jpg')
-
-            # Open and convert image
-            with Image.open(thumbnail_path) as img:
-                # Convert to RGB if necessary (removes alpha channel)
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    rgb_img = Image.new('RGB', img.size, (255, 255, 255))
-                    if img.mode == 'P':
-                        img = img.convert('RGBA')
-                    rgb_img.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
-                    img = rgb_img
-                elif img.mode != 'RGB':
-                    img = img.convert('RGB')
-
-                # Save as JPEG with high quality
-                img.save(jpeg_path, 'JPEG', quality=95, optimize=True)
-
-            # Delete original file
-            thumbnail_path.unlink()
-            logger.debug(f"Converted thumbnail to JPEG: {jpeg_path.name}")
-            return jpeg_path
-
-        except Exception as e:
-            logger.warning(f"Failed to convert thumbnail to JPEG: {e}")
-            return thumbnail_path
+        return convert_thumbnail_to_jpeg(thumbnail_path)
 
     def download(self, url: str) -> Optional[Episode]:
         """
