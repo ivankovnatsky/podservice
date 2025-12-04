@@ -1,14 +1,19 @@
 """HTTP server for serving podcast feed."""
 
+import json
 import logging
 import os
 import threading
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
-from flask import Flask, Response, redirect, render_template_string, request, send_from_directory
+from flask import Flask, Response, jsonify, redirect, render_template_string, request, send_from_directory
+from werkzeug.utils import secure_filename
 
 from .config import ServiceConfig
-from .feed import PodcastFeed
+from .feed import Episode, PodcastFeed, save_episode_metadata
+from .utils import download_image, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +437,173 @@ class PodcastServer:
             except Exception as e:
                 logger.error(f"Error deleting all episodes: {e}", exc_info=True)
                 return redirect(f"/episodes?error={str(e)}")
+
+        @self.app.route("/api/episodes", methods=["POST"])
+        def api_create_episode():
+            """
+            Create a new episode from an uploaded audio file.
+
+            Request: multipart/form-data with:
+                - audio: Audio file (required)
+                - title: Episode title (required)
+                - description: Episode description (optional)
+                - source_url: Original article URL, used as GUID (optional)
+                - pub_date: ISO 8601 timestamp (optional, defaults to now)
+                - image_url: URL to episode artwork (optional, will be downloaded)
+
+            Returns:
+                201: Episode created successfully
+                400: Missing required fields
+                409: Episode with same GUID already exists
+                500: Server error
+            """
+            try:
+                # Validate required fields
+                if "audio" not in request.files:
+                    return jsonify({"success": False, "error": "Missing required field: audio"}), 400
+
+                audio_file = request.files["audio"]
+                if audio_file.filename == "":
+                    return jsonify({"success": False, "error": "No audio file selected"}), 400
+
+                title = request.form.get("title", "").strip()
+                if not title:
+                    return jsonify({"success": False, "error": "Missing required field: title"}), 400
+
+                # Optional fields
+                description = request.form.get("description", "").strip()
+                source_url = request.form.get("source_url", "").strip()
+                image_url_param = request.form.get("image_url", "").strip()
+                pub_date_str = request.form.get("pub_date", "").strip()
+
+                # Parse pub_date or use current time
+                if pub_date_str:
+                    try:
+                        pub_date = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
+                        # Convert to naive datetime for consistency with existing code
+                        if pub_date.tzinfo is not None:
+                            pub_date = pub_date.replace(tzinfo=None)
+                    except ValueError as e:
+                        return jsonify({"success": False, "error": f"Invalid pub_date format: {e}"}), 400
+                else:
+                    pub_date = datetime.now()
+
+                # Determine GUID (source_url preferred, otherwise will use audio_url)
+                guid = source_url if source_url else None
+
+                # Check for duplicate if we have a GUID
+                if guid:
+                    metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                    if metadata_dir.exists():
+                        for metadata_file in metadata_dir.glob("*.json"):
+                            try:
+                                with open(metadata_file, "r") as f:
+                                    data = json.load(f)
+                                    existing_guid = data.get("youtube_url") or data.get("audio_url")
+                                    if existing_guid == guid:
+                                        logger.info(f"Episode already exists with GUID: {guid}")
+                                        return jsonify({
+                                            "success": True,
+                                            "message": "Episode already exists",
+                                            "episode": {
+                                                "title": data.get("title"),
+                                                "audio_url": data.get("audio_url"),
+                                                "image_url": data.get("image_url", ""),
+                                                "pub_date": data.get("pub_date"),
+                                                "guid": existing_guid,
+                                            }
+                                        }), 409
+                            except Exception:
+                                continue
+
+                # Sanitize filename
+                safe_title = sanitize_filename(title)
+                if not safe_title:
+                    safe_title = "untitled"
+
+                # Determine audio file extension
+                original_filename = secure_filename(audio_file.filename)
+                file_ext = Path(original_filename).suffix.lower()
+                if file_ext not in [".mp3", ".m4a", ".wav", ".opus", ".aac", ".ogg"]:
+                    file_ext = ".mp3"  # Default extension
+
+                # Ensure directories exist
+                audio_dir = Path(self.config.storage.audio_dir)
+                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                thumbnails_dir = Path(self.config.storage.thumbnails_dir)
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                metadata_dir.mkdir(parents=True, exist_ok=True)
+                thumbnails_dir.mkdir(parents=True, exist_ok=True)
+
+                # Save audio file
+                audio_path = audio_dir / f"{safe_title}{file_ext}"
+
+                # Handle filename collisions
+                counter = 1
+                while audio_path.exists():
+                    audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
+                    counter += 1
+
+                audio_file.save(str(audio_path))
+                logger.info(f"Saved audio file: {audio_path.name}")
+
+                # Get file size
+                file_size = audio_path.stat().st_size
+
+                # Generate URLs
+                audio_url = f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+
+                # Download and process image if URL provided
+                episode_image_url = ""
+                if image_url_param:
+                    thumbnail_path = download_image(
+                        url=image_url_param,
+                        output_dir=thumbnails_dir,
+                        base_filename=audio_path.stem,
+                    )
+                    if thumbnail_path:
+                        episode_image_url = f"{self.config.server.base_url}/thumbnails/{quote(thumbnail_path.name)}"
+                        logger.info(f"Downloaded thumbnail: {thumbnail_path.name}")
+
+                # Use audio_url as GUID if source_url not provided
+                final_guid = guid if guid else audio_url
+
+                # Create episode
+                episode = Episode(
+                    title=title,
+                    description=description,
+                    audio_file=str(audio_path),
+                    audio_url=audio_url,
+                    pub_date=pub_date,
+                    duration=0,  # Duration not provided via API
+                    file_size=file_size,
+                    youtube_url=source_url,  # Reusing youtube_url field for source_url
+                    image_url=episode_image_url,
+                )
+
+                # Save metadata
+                metadata_file = metadata_dir / f"{audio_path.stem}.json"
+                save_episode_metadata(episode, str(metadata_file))
+
+                # Add to feed
+                self.feed.add_episode(episode)
+
+                logger.info(f"Created episode via API: {title}")
+
+                return jsonify({
+                    "success": True,
+                    "episode": {
+                        "title": title,
+                        "audio_url": audio_url,
+                        "image_url": episode_image_url,
+                        "pub_date": pub_date.isoformat(),
+                        "guid": final_guid,
+                    }
+                }), 201
+
+            except Exception as e:
+                logger.error(f"Error creating episode via API: {e}", exc_info=True)
+                return jsonify({"success": False, "error": str(e)}), 500
 
     def start(self):
         """Start the server in a separate thread."""
