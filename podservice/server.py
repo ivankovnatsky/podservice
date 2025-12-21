@@ -167,6 +167,85 @@ class PodcastServer:
                 logger.error(f"Error adding URL: {e}", exc_info=True)
                 return redirect(f"/?error={str(e)}")
 
+        @self.app.route("/api/urls", methods=["POST"])
+        def api_add_url():
+            """
+            Add a URL for processing
+            ---
+            tags:
+              - URLs
+            consumes:
+              - application/json
+            parameters:
+              - name: body
+                in: body
+                required: true
+                schema:
+                  type: object
+                  required:
+                    - url
+                  properties:
+                    url:
+                      type: string
+                      description: URL to process (YouTube, Substack, or any yt-dlp supported source)
+                      example: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+            produces:
+              - application/json
+            responses:
+              200:
+                description: URL added for processing
+                schema:
+                  type: object
+                  properties:
+                    success:
+                      type: boolean
+                    message:
+                      type: string
+                    url:
+                      type: string
+              400:
+                description: Invalid request
+                schema:
+                  type: object
+                  properties:
+                    success:
+                      type: boolean
+                    error:
+                      type: string
+              500:
+                description: Server error
+            """
+            try:
+                data = request.get_json()
+
+                if not data:
+                    return jsonify({"success": False, "error": "Request body must be JSON"}), 400
+
+                url = data.get("url", "").strip()
+
+                if not url:
+                    return jsonify({"success": False, "error": "Missing required field: url"}), 400
+
+                # Basic URL validation
+                if not url.startswith("http://") and not url.startswith("https://"):
+                    return jsonify({"success": False, "error": "Invalid URL (must start with http:// or https://)"}), 400
+
+                # Append URL to watch file
+                watch_file = self.config.watch.file
+                with open(watch_file, "a") as f:
+                    f.write(f"{url}\n")
+
+                logger.info(f"URL added via API: {url}")
+                return jsonify({
+                    "success": True,
+                    "message": "URL added for processing",
+                    "url": url
+                }), 200
+
+            except Exception as e:
+                logger.error(f"Error adding URL via API: {e}", exc_info=True)
+                return jsonify({"success": False, "error": str(e)}), 500
+
         @self.app.route("/feed.xml")
         def feed_xml():
             """
