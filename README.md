@@ -1,16 +1,16 @@
 # Pod Service
 
-YouTube to Podcast Feed Service - Convert YouTube URLs to podcast episodes.
+Podcast Feed Service - Convert media URLs to podcast episodes.
 
-A lightweight Python service that watches a file for YouTube URLs, downloads
-them as audio using yt-dlp, and serves them as a podcast feed compatible with
-Apple Podcasts and other podcast players.
+A lightweight Python service that watches a file for URLs (YouTube, Substack,
+or any yt-dlp supported source), downloads them as audio, and serves them as
+a podcast feed compatible with Apple Podcasts and other podcast players.
 
 ## Features
 
 - 🎙️ **HTTP server** serving a podcast RSS feed with iTunes extensions
-- 👀 **File watching** for automatic YouTube URL processing
-- 📥 **Automatic download** using yt-dlp (high-quality audio)
+- 👀 **File watching** for automatic URL processing
+- 📥 **Automatic download** using yt-dlp (YouTube, Substack, and many other sources)
 - 🔄 **Real-time updates** - new episodes appear immediately
 - 📱 **Apple Podcast compatible** feed
 - 🚀 **NixOS/nix-darwin** service module for easy deployment
@@ -39,15 +39,17 @@ The fastest way to try it out:
 make serve
 ```
 
-**Add YouTube URLs:**
+**Add URLs:**
 
 Option 1 - Web interface (easiest):
 - Open http://localhost:8083 in your browser
-- Paste YouTube URL and click "Add to Podcast"
+- Paste any URL and click "Add to Podcast"
 
 Option 2 - Command line:
 ```bash
 echo "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >> data/urls.txt
+# Or Substack articles with audio
+echo "https://snyder.substack.com/p/how-wars-are-won" >> data/urls.txt
 ```
 
 **View feed:**
@@ -109,8 +111,8 @@ server:
   host: "0.0.0.0"
 
 podcast:
-  title: "My YouTube Podcast"
-  description: "Converted YouTube videos"
+  title: "My Podcast"
+  description: "Audio podcast episodes"
   author: "Pod Service"
 
 storage:
@@ -127,9 +129,9 @@ For production deployment on NixOS or nix-darwin, see [DEPLOYMENT.md](DEPLOYMENT
 
 ## How It Works
 
-1. Service watches a text file for YouTube URLs
+1. Service watches a text file for URLs
 2. When URLs are detected, yt-dlp downloads the audio as MP3
-3. Episode metadata is extracted and saved
+3. Episode metadata is extracted and saved (gracefully handles sources with limited metadata)
 4. The podcast feed XML is updated automatically
 5. Audio files are served via HTTP
 6. Successfully processed URLs are removed from the watch file
@@ -143,7 +145,7 @@ podservice/
 ├── cli.py            # CLI interface
 ├── config.py         # Configuration management
 ├── daemon.py         # Main service daemon
-├── downloader.py     # YouTube downloader (yt-dlp)
+├── downloader.py     # Media downloader (yt-dlp)
 ├── feed.py           # Podcast RSS feed generator
 ├── server.py         # HTTP server (Flask)
 └── watcher.py        # File watching (watchdog)
@@ -155,7 +157,7 @@ This service is inspired by:
 - [podsync](https://github.com/mxpv/podsync) - Full-featured YouTube/Vimeo to podcast converter (Go)
 - [textcast](https://github.com/ivankovnatsky/textcast) - Text-to-speech podcast service (Python)
 
-Podservice is simpler and more focused: just YouTube URLs to podcast episodes.
+Podservice is simpler and more focused: URLs to podcast episodes via yt-dlp.
 
 ## Requirements
 

@@ -1,3 +1,3 @@
-"""YouTube to Podcast Feed Service."""
+"""Podcast Feed Service."""
 
 __version__ = "0.1.0"

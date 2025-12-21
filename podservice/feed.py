@@ -24,7 +24,7 @@ class Episode:
         pub_date: datetime,
         duration: int = 0,
         file_size: int = 0,
-        youtube_url: str = "",
+        source_url: str = "",
         image_url: str = "",
     ):
         self.title = title
@@ -34,9 +34,9 @@ class Episode:
         self.pub_date = pub_date
         self.duration = duration
         self.file_size = file_size
-        self.youtube_url = youtube_url
+        self.source_url = source_url
         self.image_url = image_url
-        self.guid = youtube_url or audio_url
+        self.guid = source_url or audio_url
 
 
 class PodcastFeed:
@@ -136,8 +136,8 @@ class PodcastFeed:
                 ET.SubElement(item, "itunes:duration").text = duration_str
 
             # Link (to original source if available)
-            if episode.youtube_url:
-                ET.SubElement(item, "link").text = episode.youtube_url
+            if episode.source_url:
+                ET.SubElement(item, "link").text = episode.source_url
 
             # Episode image
             if episode.image_url:
@@ -203,6 +203,8 @@ class PodcastFeed:
                     image_url = f"{self.base_url}/thumbnails/{quote(image_filename)}"
 
                 # Create episode from metadata
+                # Support both source_url (new) and youtube_url (legacy) for backward compat
+                source_url = data.get("source_url", "") or data.get("youtube_url", "")
                 episode = Episode(
                     title=data.get("title", "Untitled"),
                     description=data.get("description", ""),
@@ -211,7 +213,7 @@ class PodcastFeed:
                     pub_date=datetime.fromisoformat(data.get("pub_date")),
                     duration=data.get("duration", 0),
                     file_size=data.get("file_size", 0),
-                    youtube_url=data.get("youtube_url", ""),
+                    source_url=source_url,
                     image_url=image_url,
                 )
 
@@ -235,7 +237,7 @@ def save_episode_metadata(episode: Episode, metadata_file: str):
         "pub_date": episode.pub_date.isoformat(),
         "duration": episode.duration,
         "file_size": episode.file_size,
-        "youtube_url": episode.youtube_url,
+        "source_url": episode.source_url,
         "image_url": episode.image_url,
     }
 

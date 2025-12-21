@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from .config import ServiceConfig, load_config
-from .downloader import YouTubeDownloader
+from .downloader import MediaDownloader
 from .feed import PodcastFeed
 from .server import PodcastServer
 from .watcher import URLFileWatcher, read_urls_from_file, remove_url_from_file
@@ -51,7 +51,7 @@ class PodService:
         self.feed.load_episodes_from_metadata(str(self.metadata_dir))
 
         # Initialize downloader
-        self.downloader = YouTubeDownloader(
+        self.downloader = MediaDownloader(
             output_dir=self.config.storage.audio_dir,
             base_url=self.config.server.base_url,
             metadata_dir=str(self.metadata_dir),
@@ -94,7 +94,7 @@ class PodService:
             try:
                 logger.info(f"Processing URL: {url}")
 
-                # Download video as audio
+                # Download media as audio
                 episode = self.downloader.download(url)
 
                 if episode:

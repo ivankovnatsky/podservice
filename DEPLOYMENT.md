@@ -69,8 +69,8 @@ Create `machines/mini/darwin/server/podservice/default.nix`:
     audioDir = "/Volumes/Storage/Data/podservice/audio";
 
     podcast = {
-      title = "My YouTube Podcast";
-      description = "YouTube videos as podcast episodes";
+      title = "My Podcast";
+      description = "Audio podcast episodes";
       author = "Ivan Kovnatsky";
       language = "en-us";
       category = "Technology";
@@ -112,13 +112,15 @@ If not using a flake input, you can import directly:
 
 ## Usage
 
-### Adding YouTube Videos
+### Adding URLs
 
-Simply add YouTube URLs to the watched file, one per line:
+Simply add URLs (YouTube, Substack, or any yt-dlp supported source) to the watched file, one per line:
 
 ```bash
 # macOS
 echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /Volumes/Storage/Data/Media/Podservice/urls.txt
+# Or Substack articles with audio
+echo "https://snyder.substack.com/p/article-title" >> /Volumes/Storage/Data/Media/Podservice/urls.txt
 
 # Linux
 echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /var/lib/podservice/urls.txt
@@ -126,7 +128,7 @@ echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /var/lib/podservice/urls.txt
 
 The service will:
 1. Detect the file change
-2. Download the video as MP3
+2. Download the media as MP3
 3. Add it to the podcast feed
 4. Remove the URL from the file after successful processing
 

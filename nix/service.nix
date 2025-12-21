@@ -44,7 +44,7 @@ let
 in
 {
   options.services.podservice = {
-    enable = mkEnableOption "Pod Service - YouTube to Podcast Feed Service";
+    enable = mkEnableOption "Pod Service - Podcast Feed Service";
 
     port = mkOption {
       type = types.int;
@@ -79,13 +79,13 @@ in
     podcast = {
       title = mkOption {
         type = types.str;
-        default = "My YouTube Podcast";
+        default = "My Podcast";
         description = "Podcast title";
       };
 
       description = mkOption {
         type = types.str;
-        default = "Converted YouTube videos as podcast episodes";
+        default = "Audio podcast episodes";
         description = "Podcast description";
       };
 
@@ -124,7 +124,7 @@ in
       file = mkOption {
         type = types.str;
         default = "/var/lib/podservice/urls.txt";
-        description = "File to watch for YouTube URLs";
+        description = "File to watch for URLs";
       };
     };
 
@@ -161,7 +161,7 @@ in
 
     # Systemd service (for NixOS)
     systemd.services.podservice = mkIf pkgs.stdenv.isLinux {
-      description = "Pod Service - YouTube to Podcast Feed";
+      description = "Pod Service - Podcast Feed Service";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
