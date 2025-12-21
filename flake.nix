@@ -24,6 +24,7 @@
           ps: with ps; [
             # Core Dependencies
             flask
+            flasgger
             watchdog
             yt-dlp
             pyyaml

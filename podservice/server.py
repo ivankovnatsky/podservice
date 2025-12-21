@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from flasgger import Swagger
 from flask import Flask, Response, jsonify, redirect, render_template_string, request, send_from_directory
 from werkzeug.utils import secure_filename
 
@@ -17,6 +18,31 @@ from .utils import download_image, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
+# Swagger configuration
+SWAGGER_CONFIG = {
+    "headers": [],
+    "specs": [
+        {
+            "endpoint": "apispec",
+            "route": "/apispec.json",
+            "rule_filter": lambda rule: True,
+            "model_filter": lambda tag: True,
+        }
+    ],
+    "static_url_path": "/flasgger_static",
+    "swagger_ui": True,
+    "specs_route": "/apidocs/",
+}
+
+SWAGGER_TEMPLATE = {
+    "info": {
+        "title": "Podservice API",
+        "description": "API for managing podcast episodes",
+        "version": "0.1.0",
+    },
+    "basePath": "/",
+}
+
 
 class PodcastServer:
     """HTTP server for podcast feed and audio files."""
@@ -25,6 +51,7 @@ class PodcastServer:
         self.config = config
         self.feed = feed
         self.app = Flask(__name__)
+        self.swagger = Swagger(self.app, config=SWAGGER_CONFIG, template=SWAGGER_TEMPLATE)
         self._setup_routes()
         self.server_thread = None
 
@@ -97,6 +124,7 @@ class PodcastServer:
                     <ul>
                         <li><a href="/feed.xml">📡 Podcast Feed</a></li>
                         <li><a href="/episodes">🎵 Episodes</a></li>
+                        <li><a href="/apidocs/">📚 API Docs</a></li>
                     </ul>
 
                 </div>
@@ -141,7 +169,19 @@ class PodcastServer:
 
         @self.app.route("/feed.xml")
         def feed_xml():
-            """Serve podcast RSS feed."""
+            """
+            Get podcast RSS feed
+            ---
+            tags:
+              - Feed
+            produces:
+              - application/xml
+            responses:
+              200:
+                description: RSS 2.0 podcast feed with iTunes extensions
+              500:
+                description: Error generating feed
+            """
             try:
                 xml_content = self.feed.generate_xml()
                 return Response(xml_content, mimetype="application/xml")
@@ -153,7 +193,27 @@ class PodcastServer:
 
         @self.app.route("/audio/<path:filename>")
         def audio_file(filename):
-            """Serve audio files."""
+            """
+            Get audio file
+            ---
+            tags:
+              - Media
+            parameters:
+              - name: filename
+                in: path
+                type: string
+                required: true
+                description: Audio filename
+            produces:
+              - audio/mpeg
+            responses:
+              200:
+                description: Audio file
+              404:
+                description: File not found
+              410:
+                description: Episode no longer available
+            """
             try:
                 audio_dir = self.config.storage.audio_dir
                 if not os.path.exists(audio_dir):
@@ -178,7 +238,27 @@ class PodcastServer:
 
         @self.app.route("/thumbnails/<path:filename>")
         def thumbnail_file(filename):
-            """Serve thumbnail images."""
+            """
+            Get thumbnail image
+            ---
+            tags:
+              - Media
+            parameters:
+              - name: filename
+                in: path
+                type: string
+                required: true
+                description: Thumbnail filename
+            produces:
+              - image/jpeg
+              - image/png
+              - image/webp
+            responses:
+              200:
+                description: Thumbnail image
+              404:
+                description: Thumbnail not found
+            """
             try:
                 thumbnails_dir = self.config.storage.thumbnails_dir
                 if not os.path.exists(thumbnails_dir):
@@ -437,21 +517,88 @@ class PodcastServer:
         @self.app.route("/api/episodes", methods=["POST"])
         def api_create_episode():
             """
-            Create a new episode from an uploaded audio file.
-
-            Request: multipart/form-data with:
-                - audio: Audio file (required)
-                - title: Episode title (required)
-                - description: Episode description (optional)
-                - source_url: Original article URL, used as GUID (optional)
-                - pub_date: ISO 8601 timestamp (optional, defaults to now)
-                - image_url: URL to episode artwork (optional, will be downloaded)
-
-            Returns:
-                201: Episode created successfully
-                400: Missing required fields
-                409: Episode with same GUID already exists
-                500: Server error
+            Create a new episode from an uploaded audio file
+            ---
+            tags:
+              - Episodes
+            consumes:
+              - multipart/form-data
+            parameters:
+              - name: audio
+                in: formData
+                type: file
+                required: true
+                description: Audio file (mp3, m4a, wav, opus, aac, ogg)
+              - name: title
+                in: formData
+                type: string
+                required: true
+                description: Episode title
+              - name: description
+                in: formData
+                type: string
+                required: false
+                description: Episode description
+              - name: source_url
+                in: formData
+                type: string
+                required: false
+                description: Original article URL (used as GUID for deduplication)
+              - name: pub_date
+                in: formData
+                type: string
+                required: false
+                description: Publication date in ISO 8601 format (defaults to now)
+              - name: image_url
+                in: formData
+                type: string
+                required: false
+                description: URL to episode artwork (will be downloaded)
+            produces:
+              - application/json
+            responses:
+              201:
+                description: Episode created successfully
+                schema:
+                  type: object
+                  properties:
+                    success:
+                      type: boolean
+                    episode:
+                      type: object
+                      properties:
+                        title:
+                          type: string
+                        audio_url:
+                          type: string
+                        image_url:
+                          type: string
+                        pub_date:
+                          type: string
+                        guid:
+                          type: string
+              400:
+                description: Missing required fields
+                schema:
+                  type: object
+                  properties:
+                    success:
+                      type: boolean
+                    error:
+                      type: string
+              409:
+                description: Episode with same GUID already exists
+                schema:
+                  type: object
+                  properties:
+                    success:
+                      type: boolean
+                    message:
+                      type: string
+                    episode:
+                      type: object
+              500:
+                description: Server error
             """
             try:
                 # Validate required fields
