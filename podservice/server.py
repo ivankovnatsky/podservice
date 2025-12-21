@@ -170,7 +170,7 @@ class PodcastServer:
         @self.app.route("/api/urls", methods=["POST"])
         def api_add_url():
             """
-            Add a URL for processing
+            Add URL(s) for processing
             ---
             tags:
               - URLs
@@ -182,18 +182,22 @@ class PodcastServer:
                 required: true
                 schema:
                   type: object
-                  required:
-                    - url
                   properties:
                     url:
                       type: string
-                      description: URL to process (YouTube, Substack, or any yt-dlp supported source)
+                      description: Single URL to process
                       example: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+                    urls:
+                      type: array
+                      items:
+                        type: string
+                      description: Multiple URLs to process
+                      example: ["https://www.youtube.com/watch?v=abc", "https://www.youtube.com/watch?v=xyz"]
             produces:
               - application/json
             responses:
               200:
-                description: URL added for processing
+                description: URL(s) added for processing
                 schema:
                   type: object
                   properties:
@@ -201,8 +205,12 @@ class PodcastServer:
                       type: boolean
                     message:
                       type: string
-                    url:
-                      type: string
+                    urls:
+                      type: array
+                      items:
+                        type: string
+                    count:
+                      type: integer
               400:
                 description: Invalid request
                 schema:
@@ -221,25 +229,36 @@ class PodcastServer:
                 if not data:
                     return jsonify({"success": False, "error": "Request body must be JSON"}), 400
 
-                url = data.get("url", "").strip()
+                # Support both single "url" and multiple "urls"
+                urls = []
+                if "urls" in data and isinstance(data["urls"], list):
+                    urls = [u.strip() for u in data["urls"] if isinstance(u, str) and u.strip()]
+                elif "url" in data and data["url"]:
+                    urls = [data["url"].strip()]
 
-                if not url:
-                    return jsonify({"success": False, "error": "Missing required field: url"}), 400
+                if not urls:
+                    return jsonify({"success": False, "error": "Missing required field: url or urls"}), 400
 
-                # Basic URL validation
-                if not url.startswith("http://") and not url.startswith("https://"):
-                    return jsonify({"success": False, "error": "Invalid URL (must start with http:// or https://)"}), 400
+                # Validate all URLs
+                invalid_urls = [u for u in urls if not u.startswith("http://") and not u.startswith("https://")]
+                if invalid_urls:
+                    return jsonify({
+                        "success": False,
+                        "error": f"Invalid URL(s) (must start with http:// or https://): {invalid_urls}"
+                    }), 400
 
-                # Append URL to watch file
+                # Append URLs to watch file
                 watch_file = self.config.watch.file
                 with open(watch_file, "a") as f:
-                    f.write(f"{url}\n")
+                    for url in urls:
+                        f.write(f"{url}\n")
 
-                logger.info(f"URL added via API: {url}")
+                logger.info(f"Added {len(urls)} URL(s) via API")
                 return jsonify({
                     "success": True,
-                    "message": "URL added for processing",
-                    "url": url
+                    "message": f"Added {len(urls)} URL(s) for processing",
+                    "urls": urls,
+                    "count": len(urls)
                 }), 200
 
             except Exception as e:
