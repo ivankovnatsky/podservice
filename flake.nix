@@ -52,7 +52,7 @@
           dependencies = pythonPackages pkgs.python312Packages;
 
           meta = with pkgs.lib; {
-            description = "YouTube to Podcast Feed Service";
+            description = "Podcast Feed Service";
             homepage = "https://github.com/ivankovnatsky/podservice";
             license = licenses.mit;
           };

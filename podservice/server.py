@@ -88,7 +88,7 @@ class PodcastServer:
             </head>
             <body>
                 <h1>Podservice</h1>
-                <p>YouTube to Podcast Feed Service</p>
+                <p>Podcast Feed Service</p>
 
                 {message}
 
@@ -99,17 +99,13 @@ class PodcastServer:
                         <li><a href="/episodes">🎵 Episodes</a></li>
                     </ul>
 
-                    <h2>External</h2>
-                    <ul>
-                        <li><a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer">YouTube</a></li>
-                    </ul>
                 </div>
 
                 <div class="form-group">
-                    <h2>Add YouTube Video</h2>
+                    <h2>Add Audio</h2>
                     <form method="POST" action="/add-url">
                         <div class="input-wrapper">
-                            <input type="text" name="url" placeholder="Paste YouTube URL here..." required>
+                            <input type="text" name="url" placeholder="Paste URL here..." required>
                             <button type="submit">Add to Podcast</button>
                         </div>
                     </form>
@@ -120,16 +116,16 @@ class PodcastServer:
 
         @self.app.route("/add-url", methods=["POST"])
         def add_url():
-            """Add a YouTube URL to the watch file."""
+            """Add a URL to the watch file."""
             try:
                 url = request.form.get("url", "").strip()
 
                 if not url:
                     return redirect("/?error=URL is required")
 
-                # Basic YouTube URL validation
-                if "youtube.com" not in url and "youtu.be" not in url:
-                    return redirect("/?error=Invalid YouTube URL")
+                # Basic URL validation - must be http or https
+                if not url.startswith("http://") and not url.startswith("https://"):
+                    return redirect("/?error=Invalid URL (must start with http:// or https://)")
 
                 # Append URL to watch file
                 watch_file = self.config.watch.file
@@ -499,7 +495,8 @@ class PodcastServer:
                             try:
                                 with open(metadata_file, "r") as f:
                                     data = json.load(f)
-                                    existing_guid = data.get("youtube_url") or data.get("audio_url")
+                                    # Support both source_url (new) and youtube_url (legacy)
+                                    existing_guid = data.get("source_url") or data.get("youtube_url") or data.get("audio_url")
                                     if existing_guid == guid:
                                         logger.info(f"Episode already exists with GUID: {guid}")
                                         return jsonify({
@@ -577,7 +574,7 @@ class PodcastServer:
                     pub_date=pub_date,
                     duration=0,  # Duration not provided via API
                     file_size=file_size,
-                    youtube_url=source_url,  # Reusing youtube_url field for source_url
+                    source_url=source_url,
                     image_url=episode_image_url,
                 )
 

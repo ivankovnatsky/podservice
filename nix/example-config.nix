@@ -31,8 +31,8 @@
 
     # Podcast metadata
     podcast = {
-      title = "My YouTube Podcast";
-      description = "Converted YouTube videos as podcast episodes";
+      title = "My Podcast";
+      description = "Audio podcast episodes";
       author = "Your Name";
       language = "en-us";
       category = "Technology";

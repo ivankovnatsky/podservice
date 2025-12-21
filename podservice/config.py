@@ -22,8 +22,8 @@ class ServerConfig:
 class PodcastConfig:
     """Podcast feed metadata."""
 
-    title: str = "My YouTube Podcast"
-    description: str = "Converted YouTube videos as podcast episodes"
+    title: str = "My Podcast"
+    description: str = "Audio podcast episodes"
     author: str = "Pod Service"
     language: str = "en-us"
     category: str = "Technology"

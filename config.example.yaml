@@ -13,8 +13,8 @@ server:
 
 podcast:
   # Podcast metadata
-  title: "My YouTube Podcast"
-  description: "YouTube videos converted to podcast episodes"
+  title: "My Podcast"
+  description: "Audio podcast episodes"
   author: "Ivan Kovnatsky"
   language: "en-us"
   category: "Technology"
@@ -36,7 +36,7 @@ watch:
   # Enable file watching
   enabled: true
 
-  # File to watch for YouTube URLs
+  # File to watch for URLs (YouTube, Substack, or any yt-dlp supported source)
   # Add one URL per line. Lines starting with # are ignored.
   file: "./data/urls.txt"
 

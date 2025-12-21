@@ -27,7 +27,7 @@ def main_simple():
     """Simple main function without click (fallback)."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Pod Service - YouTube to Podcast")
+    parser = argparse.ArgumentParser(description="Pod Service - Podcast Feed Service")
     parser.add_argument(
         "--config",
         "-c",
@@ -93,7 +93,7 @@ if click:
     @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
     @click.pass_context
     def main(ctx, verbose):
-        """Pod Service - YouTube to Podcast Feed Service."""
+        """Pod Service - Podcast Feed Service."""
         ctx.ensure_object(dict)
         ctx.obj["verbose"] = verbose
         setup_logging(verbose)

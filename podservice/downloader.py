@@ -1,4 +1,4 @@
-"""YouTube downloader using yt-dlp."""
+"""Media downloader using yt-dlp."""
 
 import json
 import logging
@@ -16,8 +16,8 @@ from .utils import convert_thumbnail_to_jpeg, sanitize_filename
 logger = logging.getLogger(__name__)
 
 
-class YouTubeDownloader:
-    """Download YouTube videos as audio using yt-dlp."""
+class MediaDownloader:
+    """Download media as audio using yt-dlp."""
 
     def __init__(self, output_dir: str, base_url: str, metadata_dir: str, thumbnails_dir: str):
         self.output_dir = Path(output_dir)
@@ -42,10 +42,10 @@ class YouTubeDownloader:
 
     def download(self, url: str) -> Optional[Episode]:
         """
-        Download YouTube video as audio.
+        Download media as audio.
 
         Args:
-            url: YouTube video URL
+            url: Media URL (YouTube, Substack, or any yt-dlp supported source)
 
         Returns:
             Episode object if successful, None otherwise
@@ -53,14 +53,15 @@ class YouTubeDownloader:
         try:
             logger.info(f"Downloading: {url}")
 
-            # First, check if this video was already downloaded
+            # First, check if this media was already downloaded
             # by checking if metadata exists for this URL
             for metadata_file in self.metadata_dir.glob("*.json"):
                 try:
                     with open(metadata_file, 'r') as f:
                         data = json.load(f)
-                        if data.get('youtube_url') == url:
-                            logger.info(f"Video already downloaded, loading existing episode: {data.get('title', 'Unknown')}")
+                        # Check both source_url (new) and youtube_url (legacy) for backward compat
+                        if data.get('source_url') == url or data.get('youtube_url') == url:
+                            logger.info(f"Media already downloaded, loading existing episode: {data.get('title', 'Unknown')}")
                             # Return the existing episode so URL gets removed from file
                             audio_file = data.get('audio_file', '')
                             if audio_file and Path(audio_file).exists():
@@ -80,7 +81,7 @@ class YouTubeDownloader:
                                     pub_date=datetime.fromisoformat(data.get('pub_date', datetime.now().isoformat())),
                                     duration=data.get('duration', 0),
                                     file_size=data.get('file_size', 0),
-                                    youtube_url=url,
+                                    source_url=url,
                                     image_url=image_url,
                                 )
                 except Exception:
@@ -195,7 +196,7 @@ class YouTubeDownloader:
                 pub_date=pub_date,
                 duration=duration,
                 file_size=file_size,
-                youtube_url=url,
+                source_url=url,
                 image_url=image_url,
             )
 
@@ -213,8 +214,8 @@ class YouTubeDownloader:
             logger.error(f"Error downloading {url}: {e}", exc_info=True)
             return None
 
-    def get_video_info(self, url: str) -> Optional[dict]:
-        """Get video information without downloading."""
+    def get_media_info(self, url: str) -> Optional[dict]:
+        """Get media information without downloading."""
         try:
             ydl_opts = {
                 "quiet": True,
@@ -227,5 +228,5 @@ class YouTubeDownloader:
                 return info
 
         except Exception as e:
-            logger.error(f"Error getting video info for {url}: {e}", exc_info=True)
+            logger.error(f"Error getting media info for {url}: {e}", exc_info=True)
             return None
