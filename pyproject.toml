@@ -1,7 +1,7 @@
 [project]
 name = "podservice"
 version = "0.1.0"
-description = "YouTube to Podcast Feed Service"
+description = "Podcast Feed Service"
 readme = "README.md"
 authors = [{name = "Ivan Kovnatsky"}]
 license = {text = "MIT"}
@@ -11,6 +11,7 @@ classifiers = [
 ]
 dependencies = [
     "flask",
+    "flasgger",
     "watchdog",
     "yt-dlp",
     "PyYAML",
@@ -32,7 +33,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry]
 name = "podservice"
 version = "0.1.0"
-description = "YouTube to Podcast Feed Service"
+description = "Podcast Feed Service"
 authors = ["Ivan Kovnatsky"]
 readme = "README.md"
 license = "MIT"
@@ -41,6 +42,7 @@ homepage = "https://github.com/ivankovnatsky/podservice"
 [tool.poetry.dependencies]
 python = ">=3.8"
 flask = "*"
+flasgger = "*"
 watchdog = "*"
 yt-dlp = "*"
 PyYAML = "*"

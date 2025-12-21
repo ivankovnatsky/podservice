@@ -34,11 +34,13 @@ let
   # Python environment with podservice
   pythonEnv = pkgs.python312.withPackages (ps: with ps; [
     flask
+    flasgger
     watchdog
     yt-dlp
     pyyaml
     requests
     click
+    pillow
   ]);
 
 in
