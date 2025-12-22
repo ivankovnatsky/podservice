@@ -289,7 +289,7 @@ class PodcastServer:
 
                 # Ensure directories exist
                 audio_dir = Path(self.config.storage.audio_dir)
-                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                metadata_dir = Path(self.config.storage.metadata_dir)
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 metadata_dir.mkdir(parents=True, exist_ok=True)
 
@@ -603,7 +603,7 @@ class PodcastServer:
                 elif error:
                     message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin: 15px 0;">✗ Error: {error}</div>'
 
-                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                metadata_dir = Path(self.config.storage.metadata_dir)
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
 
                 files = []
@@ -734,7 +734,7 @@ class PodcastServer:
                     return redirect("/episodes?error=Invalid filename")
 
                 audio_dir = Path(self.config.storage.audio_dir)
-                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                metadata_dir = Path(self.config.storage.metadata_dir)
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
 
                 # Delete audio file
@@ -772,7 +772,7 @@ class PodcastServer:
             """Delete all episodes (audio files, metadata, and thumbnails)."""
             try:
                 audio_dir = Path(self.config.storage.audio_dir)
-                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                metadata_dir = Path(self.config.storage.metadata_dir)
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
 
                 deleted_count = 0
@@ -931,7 +931,7 @@ class PodcastServer:
 
                 # Check for duplicate if we have a GUID
                 if guid:
-                    metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                    metadata_dir = Path(self.config.storage.metadata_dir)
                     if metadata_dir.exists():
                         for metadata_file in metadata_dir.glob("*.json"):
                             try:
@@ -968,7 +968,7 @@ class PodcastServer:
 
                 # Ensure directories exist
                 audio_dir = Path(self.config.storage.audio_dir)
-                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                metadata_dir = Path(self.config.storage.metadata_dir)
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 metadata_dir.mkdir(parents=True, exist_ok=True)
