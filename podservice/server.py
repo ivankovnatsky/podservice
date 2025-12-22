@@ -66,7 +66,10 @@ class PodcastServer:
 
             message = ""
             if success:
-                message = f'<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ URL added successfully! Processing will start automatically.</div>'
+                if success == "1":
+                    message = '<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ Added successfully!</div>'
+                else:
+                    message = f'<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ {success} files uploaded successfully!</div>'
             elif error:
                 message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 20px;">✗ Error: {error}</div>'
 
@@ -144,15 +147,15 @@ class PodcastServer:
                 </div>
 
                 <div class="form-group">
-                    <h2>Upload Audio File</h2>
+                    <h2>Upload Audio Files</h2>
                     <form id="upload-form" method="POST" action="/upload-audio" enctype="multipart/form-data">
                         <div style="margin-bottom: 15px;">
-                            <label for="audio" style="display: block; margin-bottom: 5px; font-weight: 500;">Audio File *</label>
+                            <label for="audio" style="display: block; margin-bottom: 5px; font-weight: 500;">Audio Files *</label>
                             <div id="drop-zone" style="width: 100%; padding: 30px 10px; border: 2px dashed #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fafafa; text-align: center; cursor: pointer; transition: all 0.2s ease;">
-                                <input type="file" name="audio" id="audio" accept="audio/*" required style="display: none;">
+                                <input type="file" name="audio" id="audio" accept="audio/*" required multiple style="display: none;">
                                 <div id="drop-text">
                                     <span style="font-size: 32px; display: block; margin-bottom: 8px;">🎵</span>
-                                    <span>Drag & drop audio file here or <strong style="color: #007bff;">browse</strong></span>
+                                    <span>Drag & drop audio files here or <strong style="color: #007bff;">browse</strong></span>
                                 </div>
                                 <div id="file-selected" style="display: none;">
                                     <span style="font-size: 32px; display: block; margin-bottom: 8px;">✓</span>
@@ -161,11 +164,7 @@ class PodcastServer:
                             </div>
                         </div>
                         <div style="margin-bottom: 15px;">
-                            <label for="title" style="display: block; margin-bottom: 5px; font-weight: 500;">Title (optional)</label>
-                            <input type="text" name="title" id="title" placeholder="Episode title (auto-filled from filename)...">
-                        </div>
-                        <div style="margin-bottom: 15px;">
-                            <label for="description" style="display: block; margin-bottom: 5px; font-weight: 500;">Description (optional)</label>
+                            <label for="description" style="display: block; margin-bottom: 5px; font-weight: 500;">Description (optional, shared for all files)</label>
                             <textarea name="description" id="description" placeholder="Episode description..." rows="3" style="resize: vertical;"></textarea>
                         </div>
                         <button type="submit" style="background-color: #007bff; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; width: 100%;">Upload to Podcast</button>
@@ -179,7 +178,6 @@ class PodcastServer:
                         const dropText = document.getElementById('drop-text');
                         const fileSelected = document.getElementById('file-selected');
                         const fileName = document.getElementById('file-name');
-                        const titleInput = document.getElementById('title');
 
                         const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
                         const colors = {{
@@ -209,15 +207,13 @@ class PodcastServer:
 
                         dropZone.addEventListener('drop', (e) => {{
                             e.preventDefault();
-                            dropZone.style.borderColor = colors.successBorder;
-                            dropZone.style.backgroundColor = colors.successBg;
-
                             const files = e.dataTransfer.files;
-                            if (files.length > 0 && files[0].type.startsWith('audio/')) {{
+                            const audioFiles = Array.from(files).filter(f => f.type.startsWith('audio/'));
+                            if (audioFiles.length > 0) {{
                                 fileInput.files = files;
-                                showFileSelected(files[0]);
+                                showFilesSelected(audioFiles);
                             }} else {{
-                                alert('Please drop an audio file.');
+                                alert('Please drop audio files.');
                                 resetDropZone();
                             }}
                         }});
@@ -225,22 +221,21 @@ class PodcastServer:
                         // File input change
                         fileInput.addEventListener('change', () => {{
                             if (fileInput.files.length > 0) {{
-                                dropZone.style.borderColor = colors.successBorder;
-                                dropZone.style.backgroundColor = colors.successBg;
-                                showFileSelected(fileInput.files[0]);
+                                showFilesSelected(Array.from(fileInput.files));
                             }}
                         }});
 
-                        function showFileSelected(file) {{
+                        function showFilesSelected(files) {{
+                            dropZone.style.borderColor = colors.successBorder;
+                            dropZone.style.backgroundColor = colors.successBg;
                             dropText.style.display = 'none';
                             fileSelected.style.display = 'block';
-                            fileName.textContent = file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)';
 
-                            // Auto-fill title if empty
-                            if (!titleInput.value) {{
-                                let name = file.name.replace(/\.[^/.]+$/, '');
-                                name = name.replace(/[-_]/g, ' ');
-                                titleInput.value = name;
+                            if (files.length === 1) {{
+                                fileName.textContent = files[0].name + ' (' + (files[0].size / 1024 / 1024).toFixed(1) + ' MB)';
+                            }} else {{
+                                const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+                                fileName.innerHTML = files.length + ' files selected (' + (totalSize / 1024 / 1024).toFixed(1) + ' MB total)<br><small style="color: #888;">' + files.map(f => f.name).join(', ') + '</small>';
                             }}
                         }}
 
@@ -283,40 +278,14 @@ class PodcastServer:
 
         @self.app.route("/upload-audio", methods=["POST"])
         def upload_audio():
-            """Upload an audio file via web form."""
+            """Upload audio files via web form."""
             try:
-                # Check for audio file
-                if "audio" not in request.files:
-                    return redirect("/?error=No audio file provided")
-
-                audio_file = request.files["audio"]
-                if audio_file.filename == "":
-                    return redirect("/?error=No audio file selected")
-
-                # Get file extension from uploaded file
-                original_filename = secure_filename(audio_file.filename)
-                file_stem = Path(original_filename).stem
-
-                # Title is optional - derive from filename if not provided
-                title = request.form.get("title", "").strip()
-                if not title:
-                    # Derive title from filename: remove extension, replace -_ with spaces
-                    title = file_stem.replace("-", " ").replace("_", " ")
-                    if not title:
-                        title = "Untitled"
+                # Get all uploaded audio files
+                audio_files = request.files.getlist("audio")
+                if not audio_files or all(f.filename == "" for f in audio_files):
+                    return redirect("/?error=No audio files selected")
 
                 description = request.form.get("description", "").strip()
-
-                # Sanitize filename for storage
-                safe_title = sanitize_filename(title)
-                if not safe_title:
-                    safe_title = file_stem if file_stem else "untitled"
-                file_ext = Path(original_filename).suffix.lower()
-
-                # Accept any audio format - store as-is
-                # Common formats: .mp3, .m4a, .wav, .opus, .aac, .ogg, .flac, .wma, .aiff
-                if not file_ext:
-                    file_ext = ".mp3"  # Default if no extension
 
                 # Ensure directories exist
                 audio_dir = Path(self.config.storage.audio_dir)
@@ -324,46 +293,72 @@ class PodcastServer:
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 metadata_dir.mkdir(parents=True, exist_ok=True)
 
-                # Determine audio file path with collision handling
-                audio_path = audio_dir / f"{safe_title}{file_ext}"
-                counter = 1
-                while audio_path.exists():
-                    audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
-                    counter += 1
+                uploaded_count = 0
+                for audio_file in audio_files:
+                    if audio_file.filename == "":
+                        continue
 
-                # Save the audio file
-                audio_file.save(str(audio_path))
-                logger.info(f"Uploaded audio file: {audio_path.name}")
+                    # Get file info
+                    original_filename = secure_filename(audio_file.filename)
+                    file_stem = Path(original_filename).stem
+                    file_ext = Path(original_filename).suffix.lower()
 
-                # Get file size
-                file_size = audio_path.stat().st_size
+                    # Derive title from filename: remove extension, replace -_ with spaces
+                    title = file_stem.replace("-", " ").replace("_", " ")
+                    if not title:
+                        title = "Untitled"
 
-                # Generate URLs
-                audio_url = f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
-                pub_date = datetime.now()
+                    # Sanitize filename for storage
+                    safe_title = sanitize_filename(title)
+                    if not safe_title:
+                        safe_title = file_stem if file_stem else "untitled"
 
-                # Create episode
-                episode = Episode(
-                    title=title,
-                    description=description,
-                    audio_file=str(audio_path),
-                    audio_url=audio_url,
-                    pub_date=pub_date,
-                    duration=0,
-                    file_size=file_size,
-                    source_url="",
-                    image_url="",
-                )
+                    # Default extension if missing
+                    if not file_ext:
+                        file_ext = ".mp3"
 
-                # Save metadata
-                metadata_file = metadata_dir / f"{audio_path.stem}.json"
-                save_episode_metadata(episode, str(metadata_file))
+                    # Determine audio file path with collision handling
+                    audio_path = audio_dir / f"{safe_title}{file_ext}"
+                    counter = 1
+                    while audio_path.exists():
+                        audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
+                        counter += 1
 
-                # Add to feed
-                self.feed.add_episode(episode)
+                    # Save the audio file
+                    audio_file.save(str(audio_path))
+                    logger.info(f"Uploaded audio file: {audio_path.name}")
 
-                logger.info(f"Created episode via upload: {title}")
-                return redirect("/?success=1")
+                    # Get file size
+                    file_size = audio_path.stat().st_size
+
+                    # Generate URLs
+                    audio_url = f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+                    pub_date = datetime.now()
+
+                    # Create episode
+                    episode = Episode(
+                        title=title,
+                        description=description,
+                        audio_file=str(audio_path),
+                        audio_url=audio_url,
+                        pub_date=pub_date,
+                        duration=0,
+                        file_size=file_size,
+                        source_url="",
+                        image_url="",
+                    )
+
+                    # Save metadata
+                    metadata_file = metadata_dir / f"{audio_path.stem}.json"
+                    save_episode_metadata(episode, str(metadata_file))
+
+                    # Add to feed
+                    self.feed.add_episode(episode)
+
+                    logger.info(f"Created episode via upload: {title}")
+                    uploaded_count += 1
+
+                return redirect(f"/?success={uploaded_count}")
 
             except Exception as e:
                 logger.error(f"Error uploading audio: {e}", exc_info=True)
