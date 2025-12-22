@@ -85,7 +85,7 @@ class PodcastServer:
                     .links a:hover {{ text-decoration: underline; }}
                     .form-group {{ margin: 40px 0 20px 0; padding-top: 30px; border-top: 1px solid #eee; }}
                     .input-wrapper {{ position: relative; display: flex; gap: 10px; }}
-                    input[type="text"] {{ flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; }}
+                    input[type="text"], textarea {{ flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; width: 100%; }}
                     button {{ background-color: #007bff; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }}
                     button:hover {{ background-color: #0056b3; }}
 
@@ -162,11 +162,11 @@ class PodcastServer:
                         </div>
                         <div style="margin-bottom: 15px;">
                             <label for="title" style="display: block; margin-bottom: 5px; font-weight: 500;">Title (optional)</label>
-                            <input type="text" name="title" id="title" placeholder="Episode title (auto-filled from filename)..." style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333;">
+                            <input type="text" name="title" id="title" placeholder="Episode title (auto-filled from filename)...">
                         </div>
                         <div style="margin-bottom: 15px;">
                             <label for="description" style="display: block; margin-bottom: 5px; font-weight: 500;">Description (optional)</label>
-                            <textarea name="description" id="description" placeholder="Episode description..." rows="3" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; resize: vertical;"></textarea>
+                            <textarea name="description" id="description" placeholder="Episode description..." rows="3" style="resize: vertical;"></textarea>
                         </div>
                         <button type="submit" style="background-color: #007bff; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; width: 100%;">Upload to Podcast</button>
                     </form>
