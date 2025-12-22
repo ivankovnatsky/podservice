@@ -27,7 +27,7 @@ class PodService:
         Path(self.config.storage.audio_dir).mkdir(parents=True, exist_ok=True)
 
         # Create metadata directory
-        self.metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+        self.metadata_dir = Path(self.config.storage.metadata_dir)
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
 
         # Ensure watch file exists
