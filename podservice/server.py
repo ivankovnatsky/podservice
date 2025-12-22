@@ -99,6 +99,9 @@ class PodcastServer:
                         button {{ background-color: #0d6efd; }}
                         button:hover {{ background-color: #0b5ed7; }}
                         label {{ color: #e0e0e0; }}
+                        #drop-zone {{ background-color: #2a2a2a !important; border-color: #444 !important; }}
+                        #drop-zone span {{ color: #e0e0e0; }}
+                        #drop-zone strong {{ color: #4a9eff !important; }}
                     }}
 
                     /* Mobile styles */
@@ -142,22 +145,113 @@ class PodcastServer:
 
                 <div class="form-group">
                     <h2>Upload Audio File</h2>
-                    <form method="POST" action="/upload-audio" enctype="multipart/form-data">
+                    <form id="upload-form" method="POST" action="/upload-audio" enctype="multipart/form-data">
                         <div style="margin-bottom: 15px;">
                             <label for="audio" style="display: block; margin-bottom: 5px; font-weight: 500;">Audio File *</label>
-                            <input type="file" name="audio" id="audio" accept="audio/*" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333;">
+                            <div id="drop-zone" style="width: 100%; padding: 30px 10px; border: 2px dashed #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fafafa; text-align: center; cursor: pointer; transition: all 0.2s ease;">
+                                <input type="file" name="audio" id="audio" accept="audio/*" required style="display: none;">
+                                <div id="drop-text">
+                                    <span style="font-size: 32px; display: block; margin-bottom: 8px;">🎵</span>
+                                    <span>Drag & drop audio file here or <strong style="color: #007bff;">browse</strong></span>
+                                </div>
+                                <div id="file-selected" style="display: none;">
+                                    <span style="font-size: 32px; display: block; margin-bottom: 8px;">✓</span>
+                                    <span id="file-name" style="word-break: break-all;"></span>
+                                </div>
+                            </div>
                         </div>
                         <div style="margin-bottom: 15px;">
-                            <label for="title" style="display: block; margin-bottom: 5px; font-weight: 500;">Title *</label>
-                            <input type="text" name="title" id="title" placeholder="Episode title..." required style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333;">
+                            <label for="title" style="display: block; margin-bottom: 5px; font-weight: 500;">Title (optional)</label>
+                            <input type="text" name="title" id="title" placeholder="Episode title (auto-filled from filename)..." style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333;">
                         </div>
                         <div style="margin-bottom: 15px;">
-                            <label for="description" style="display: block; margin-bottom: 5px; font-weight: 500;">Description</label>
-                            <textarea name="description" id="description" placeholder="Episode description (optional)..." rows="3" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; resize: vertical;"></textarea>
+                            <label for="description" style="display: block; margin-bottom: 5px; font-weight: 500;">Description (optional)</label>
+                            <textarea name="description" id="description" placeholder="Episode description..." rows="3" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; resize: vertical;"></textarea>
                         </div>
-                        <button type="submit" style="background-color: #28a745; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; width: 100%;">Upload to Podcast</button>
+                        <button type="submit" style="background-color: #007bff; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; width: 100%;">Upload to Podcast</button>
                     </form>
                 </div>
+
+                <script>
+                    (function() {{
+                        const dropZone = document.getElementById('drop-zone');
+                        const fileInput = document.getElementById('audio');
+                        const dropText = document.getElementById('drop-text');
+                        const fileSelected = document.getElementById('file-selected');
+                        const fileName = document.getElementById('file-name');
+                        const titleInput = document.getElementById('title');
+
+                        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                        const colors = {{
+                            border: isDark ? '#444' : '#ddd',
+                            bg: isDark ? '#2a2a2a' : '#fafafa',
+                            dragBorder: '#007bff',
+                            dragBg: isDark ? '#1a3a5c' : '#e8f4ff',
+                            successBorder: '#28a745',
+                            successBg: isDark ? '#1a3d1a' : '#e8f5e9'
+                        }};
+
+                        // Click to browse
+                        dropZone.addEventListener('click', () => fileInput.click());
+
+                        // Drag events
+                        dropZone.addEventListener('dragover', (e) => {{
+                            e.preventDefault();
+                            dropZone.style.borderColor = colors.dragBorder;
+                            dropZone.style.backgroundColor = colors.dragBg;
+                        }});
+
+                        dropZone.addEventListener('dragleave', (e) => {{
+                            e.preventDefault();
+                            dropZone.style.borderColor = colors.border;
+                            dropZone.style.backgroundColor = colors.bg;
+                        }});
+
+                        dropZone.addEventListener('drop', (e) => {{
+                            e.preventDefault();
+                            dropZone.style.borderColor = colors.successBorder;
+                            dropZone.style.backgroundColor = colors.successBg;
+
+                            const files = e.dataTransfer.files;
+                            if (files.length > 0 && files[0].type.startsWith('audio/')) {{
+                                fileInput.files = files;
+                                showFileSelected(files[0]);
+                            }} else {{
+                                alert('Please drop an audio file.');
+                                resetDropZone();
+                            }}
+                        }});
+
+                        // File input change
+                        fileInput.addEventListener('change', () => {{
+                            if (fileInput.files.length > 0) {{
+                                dropZone.style.borderColor = colors.successBorder;
+                                dropZone.style.backgroundColor = colors.successBg;
+                                showFileSelected(fileInput.files[0]);
+                            }}
+                        }});
+
+                        function showFileSelected(file) {{
+                            dropText.style.display = 'none';
+                            fileSelected.style.display = 'block';
+                            fileName.textContent = file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + ' MB)';
+
+                            // Auto-fill title if empty
+                            if (!titleInput.value) {{
+                                let name = file.name.replace(/\.[^/.]+$/, '');
+                                name = name.replace(/[-_]/g, ' ');
+                                titleInput.value = name;
+                            }}
+                        }}
+
+                        function resetDropZone() {{
+                            dropZone.style.borderColor = colors.border;
+                            dropZone.style.backgroundColor = colors.bg;
+                            dropText.style.display = 'block';
+                            fileSelected.style.display = 'none';
+                        }}
+                    }})();
+                </script>
             </body>
             </html>
             """
@@ -199,19 +293,24 @@ class PodcastServer:
                 if audio_file.filename == "":
                     return redirect("/?error=No audio file selected")
 
+                # Get file extension from uploaded file
+                original_filename = secure_filename(audio_file.filename)
+                file_stem = Path(original_filename).stem
+
+                # Title is optional - derive from filename if not provided
                 title = request.form.get("title", "").strip()
                 if not title:
-                    return redirect("/?error=Title is required")
+                    # Derive title from filename: remove extension, replace -_ with spaces
+                    title = file_stem.replace("-", " ").replace("_", " ")
+                    if not title:
+                        title = "Untitled"
 
                 description = request.form.get("description", "").strip()
 
                 # Sanitize filename for storage
                 safe_title = sanitize_filename(title)
                 if not safe_title:
-                    safe_title = "untitled"
-
-                # Get file extension from uploaded file
-                original_filename = secure_filename(audio_file.filename)
+                    safe_title = file_stem if file_stem else "untitled"
                 file_ext = Path(original_filename).suffix.lower()
 
                 # Accept any audio format - store as-is
