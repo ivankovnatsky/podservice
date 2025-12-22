@@ -95,9 +95,10 @@ class PodcastServer:
                         h1, h2 {{ color: #e0e0e0; }}
                         .links a {{ color: #4a9eff; }}
                         .form-group {{ border-top-color: #333; }}
-                        input[type="text"] {{ background-color: #2a2a2a; color: #e0e0e0; border-color: #444; }}
+                        input[type="text"], input[type="file"], textarea {{ background-color: #2a2a2a; color: #e0e0e0; border-color: #444; }}
                         button {{ background-color: #0d6efd; }}
                         button:hover {{ background-color: #0b5ed7; }}
+                        label {{ color: #e0e0e0; }}
                     }}
 
                     /* Mobile styles */
@@ -130,12 +131,31 @@ class PodcastServer:
                 </div>
 
                 <div class="form-group">
-                    <h2>Add Audio</h2>
+                    <h2>Add from URL</h2>
                     <form method="POST" action="/add-url">
                         <div class="input-wrapper">
                             <input type="text" name="url" placeholder="Paste URL here..." required>
                             <button type="submit">Add to Podcast</button>
                         </div>
+                    </form>
+                </div>
+
+                <div class="form-group">
+                    <h2>Upload Audio File</h2>
+                    <form method="POST" action="/upload-audio" enctype="multipart/form-data">
+                        <div style="margin-bottom: 15px;">
+                            <label for="audio" style="display: block; margin-bottom: 5px; font-weight: 500;">Audio File *</label>
+                            <input type="file" name="audio" id="audio" accept="audio/*" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333;">
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label for="title" style="display: block; margin-bottom: 5px; font-weight: 500;">Title *</label>
+                            <input type="text" name="title" id="title" placeholder="Episode title..." required style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333;">
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label for="description" style="display: block; margin-bottom: 5px; font-weight: 500;">Description</label>
+                            <textarea name="description" id="description" placeholder="Episode description (optional)..." rows="3" style="width: 100%; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; resize: vertical;"></textarea>
+                        </div>
+                        <button type="submit" style="background-color: #28a745; color: white; padding: 12px 24px; font-size: 16px; border: none; border-radius: 4px; cursor: pointer; width: 100%;">Upload to Podcast</button>
                     </form>
                 </div>
             </body>
@@ -165,6 +185,89 @@ class PodcastServer:
 
             except Exception as e:
                 logger.error(f"Error adding URL: {e}", exc_info=True)
+                return redirect(f"/?error={str(e)}")
+
+        @self.app.route("/upload-audio", methods=["POST"])
+        def upload_audio():
+            """Upload an audio file via web form."""
+            try:
+                # Check for audio file
+                if "audio" not in request.files:
+                    return redirect("/?error=No audio file provided")
+
+                audio_file = request.files["audio"]
+                if audio_file.filename == "":
+                    return redirect("/?error=No audio file selected")
+
+                title = request.form.get("title", "").strip()
+                if not title:
+                    return redirect("/?error=Title is required")
+
+                description = request.form.get("description", "").strip()
+
+                # Sanitize filename for storage
+                safe_title = sanitize_filename(title)
+                if not safe_title:
+                    safe_title = "untitled"
+
+                # Get file extension from uploaded file
+                original_filename = secure_filename(audio_file.filename)
+                file_ext = Path(original_filename).suffix.lower()
+
+                # Accept any audio format - store as-is
+                # Common formats: .mp3, .m4a, .wav, .opus, .aac, .ogg, .flac, .wma, .aiff
+                if not file_ext:
+                    file_ext = ".mp3"  # Default if no extension
+
+                # Ensure directories exist
+                audio_dir = Path(self.config.storage.audio_dir)
+                metadata_dir = Path(self.config.storage.data_dir) / "metadata"
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                metadata_dir.mkdir(parents=True, exist_ok=True)
+
+                # Determine audio file path with collision handling
+                audio_path = audio_dir / f"{safe_title}{file_ext}"
+                counter = 1
+                while audio_path.exists():
+                    audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
+                    counter += 1
+
+                # Save the audio file
+                audio_file.save(str(audio_path))
+                logger.info(f"Uploaded audio file: {audio_path.name}")
+
+                # Get file size
+                file_size = audio_path.stat().st_size
+
+                # Generate URLs
+                audio_url = f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+                pub_date = datetime.now()
+
+                # Create episode
+                episode = Episode(
+                    title=title,
+                    description=description,
+                    audio_file=str(audio_path),
+                    audio_url=audio_url,
+                    pub_date=pub_date,
+                    duration=0,
+                    file_size=file_size,
+                    source_url="",
+                    image_url="",
+                )
+
+                # Save metadata
+                metadata_file = metadata_dir / f"{audio_path.stem}.json"
+                save_episode_metadata(episode, str(metadata_file))
+
+                # Add to feed
+                self.feed.add_episode(episode)
+
+                logger.info(f"Created episode via upload: {title}")
+                return redirect("/?success=1")
+
+            except Exception as e:
+                logger.error(f"Error uploading audio: {e}", exc_info=True)
                 return redirect(f"/?error={str(e)}")
 
         @self.app.route("/api/urls", methods=["POST"])
@@ -411,7 +514,7 @@ class PodcastServer:
 
                 files = []
                 for file in sorted(audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
-                    if file.is_file() and file.suffix in [".mp3", ".m4a", ".wav"]:
+                    if file.is_file() and file.suffix.lower() in [".mp3", ".m4a", ".wav", ".opus", ".aac", ".ogg", ".flac", ".wma", ".aiff", ".webm"]:
                         size_mb = file.stat().st_size / (1024 * 1024)
 
                         # Try to find thumbnail (prefer JPEG first for compatibility)
@@ -583,7 +686,7 @@ class PodcastServer:
                 # Delete all audio files
                 if audio_dir.exists():
                     for audio_file in audio_dir.glob("*"):
-                        if audio_file.is_file() and audio_file.suffix in [".mp3", ".m4a", ".wav"]:
+                        if audio_file.is_file() and audio_file.suffix.lower() in [".mp3", ".m4a", ".wav", ".opus", ".aac", ".ogg", ".flac", ".wma", ".aiff", ".webm"]:
                             audio_file.unlink()
                             logger.info(f"Deleted audio file: {audio_file.name}")
                             deleted_count += 1
@@ -626,7 +729,7 @@ class PodcastServer:
                 in: formData
                 type: file
                 required: true
-                description: Audio file (mp3, m4a, wav, opus, aac, ogg)
+                description: Audio file (any format - mp3, m4a, wav, opus, aac, ogg, flac, webm, etc.)
               - name: title
                 in: formData
                 type: string
@@ -763,11 +866,11 @@ class PodcastServer:
                 if not safe_title:
                     safe_title = "untitled"
 
-                # Determine audio file extension
+                # Determine audio file extension - accept any audio format
                 original_filename = secure_filename(audio_file.filename)
                 file_ext = Path(original_filename).suffix.lower()
-                if file_ext not in [".mp3", ".m4a", ".wav", ".opus", ".aac", ".ogg"]:
-                    file_ext = ".mp3"  # Default extension
+                if not file_ext:
+                    file_ext = ".mp3"  # Default if no extension
 
                 # Ensure directories exist
                 audio_dir = Path(self.config.storage.audio_dir)
