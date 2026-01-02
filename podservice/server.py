@@ -607,9 +607,12 @@ class PodcastServer:
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
 
                 files = []
+                total_size_bytes = 0
                 for file in sorted(audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
                     if file.is_file() and file.suffix.lower() in [".mp3", ".m4a", ".wav", ".opus", ".aac", ".ogg", ".flac", ".wma", ".aiff", ".webm"]:
-                        size_mb = file.stat().st_size / (1024 * 1024)
+                        file_size = file.stat().st_size
+                        total_size_bytes += file_size
+                        size_mb = file_size / (1024 * 1024)
 
                         # Try to find thumbnail (prefer JPEG first for compatibility)
                         thumbnail_html = ""
@@ -664,6 +667,14 @@ class PodcastServer:
                     """
 
                 files_html = "\n".join(files)
+                total_size_gb = total_size_bytes / (1024 * 1024 * 1024)
+                total_size_mb = total_size_bytes / (1024 * 1024)
+                # Show GB if >= 1 GB, otherwise MB
+                if total_size_gb >= 1:
+                    total_size_str = f"{total_size_gb:.2f} GB"
+                else:
+                    total_size_str = f"{total_size_mb:.1f} MB"
+                episode_count = len(files)
                 return f"""
                 <html>
                 <head>
@@ -680,6 +691,7 @@ class PodcastServer:
                         .header-controls {{ display: flex; justify-content: space-between; align-items: center; margin: 15px 0; }}
                         .delete-all-btn {{ background-color: #dc3545; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }}
                         .delete-all-btn:hover {{ background-color: #c82333; }}
+                        .stats {{ color: #666; font-size: 14px; margin: 10px 0; }}
 
                         /* Dark mode */
                         @media (prefers-color-scheme: dark) {{
@@ -689,6 +701,7 @@ class PodcastServer:
                             li span {{ color: #999 !important; }}
                             img {{ border-color: #333; }}
                             .thumbnail-placeholder {{ background-color: #333 !important; }}
+                            .stats {{ color: #999; }}
                         }}
 
                         @media (max-width: 768px) {{
@@ -708,6 +721,7 @@ class PodcastServer:
                             <button type="submit" class="delete-all-btn">Delete All Episodes</button>
                         </form>
                     </div>
+                    <p class="stats">{episode_count} episodes &middot; {total_size_str} total</p>
                     {message}
                     <ul>
                     {files_html}
