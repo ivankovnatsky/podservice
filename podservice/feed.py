@@ -9,6 +9,8 @@ from typing import Dict, List
 from urllib.parse import quote, unquote
 from xml.etree import ElementTree as ET
 
+from .utils import extract_video_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +28,7 @@ class Episode:
         file_size: int = 0,
         source_url: str = "",
         image_url: str = "",
+        video_id: str = "",
     ):
         self.title = title
         self.description = description
@@ -36,6 +39,7 @@ class Episode:
         self.file_size = file_size
         self.source_url = source_url
         self.image_url = image_url
+        self.video_id = video_id
         self.guid = source_url or audio_url
 
 
@@ -158,14 +162,18 @@ class PodcastFeed:
             f.write(xml_content)
         logger.info(f"Saved feed to {file_path}")
 
-    def load_episodes_from_metadata(self, metadata_dir: str):
-        """Load episodes from metadata files in directory."""
+    def load_episodes_from_metadata(self, metadata_dir: str, audio_dir: str = "", thumbnails_dir: str = ""):
+        """Load episodes from metadata files in directory.
+
+        Also migrates legacy title-based filenames to video_id-based filenames.
+        """
         metadata_path = Path(metadata_dir)
         if not metadata_path.exists():
             logger.debug(f"Metadata directory does not exist: {metadata_dir}")
             return
 
         skipped = 0
+        migrated = 0
         # Find all .json metadata files
         for json_file in metadata_path.glob("*.json"):
             try:
@@ -188,23 +196,75 @@ class PodcastFeed:
                     skipped += 1
                     continue
 
+                # Support both source_url (new) and youtube_url (legacy) for backward compat
+                source_url = data.get("source_url", "") or data.get("youtube_url", "")
+
+                # Get or derive video_id
+                video_id = data.get("video_id", "")
+                if not video_id and source_url:
+                    video_id = extract_video_id(source_url)
+
+                # Migrate title-based filenames to video_id-based filenames
+                if video_id and audio_dir:
+                    audio_path = Path(audio_file)
+                    if audio_path.stem != video_id:
+                        new_audio_path = Path(audio_dir) / f"{video_id}{audio_path.suffix}"
+                        if not new_audio_path.exists():
+                            audio_path.rename(new_audio_path)
+                            logger.info(f"Migrated audio: {audio_path.name} -> {new_audio_path.name}")
+                            audio_file = str(new_audio_path)
+
+                            # Rename thumbnail
+                            if thumbnails_dir:
+                                for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                                    old_thumb = Path(thumbnails_dir) / f"{audio_path.stem}{ext}"
+                                    if old_thumb.exists():
+                                        new_thumb = Path(thumbnails_dir) / f"{video_id}{ext}"
+                                        old_thumb.rename(new_thumb)
+                                        logger.info(f"Migrated thumbnail: {old_thumb.name} -> {new_thumb.name}")
+                                        break
+
+                            # Rename metadata file
+                            new_json = metadata_path / f"{video_id}.json"
+                            if json_file != new_json:
+                                data["video_id"] = video_id
+                                data["audio_file"] = audio_file
+                                with open(json_file, "w") as f:
+                                    json.dump(data, f, indent=2)
+                                json_file.rename(new_json)
+                                logger.info(f"Migrated metadata: {json_file.name} -> {new_json.name}")
+
+                            migrated += 1
+                        else:
+                            audio_file = str(new_audio_path)
+
+                    # Save video_id to metadata if not present
+                    elif "video_id" not in data:
+                        data["video_id"] = video_id
+                        with open(json_file, "w") as f:
+                            json.dump(data, f, indent=2)
+
                 # Always regenerate URL with current base_url from config
-                # This allows changing base_url without re-downloading
                 filename = os.path.basename(audio_file)
                 audio_url = f"{self.base_url}/audio/{quote(filename)}"
 
                 # Regenerate image URL with current base_url if thumbnail exists
                 image_url = ""
-                stored_image_url = data.get("image_url", "")
-                if stored_image_url:
-                    # Extract just the filename from stored URL and unquote it first
-                    # to avoid double-encoding
-                    image_filename = unquote(stored_image_url.split('/')[-1])
-                    image_url = f"{self.base_url}/thumbnails/{quote(image_filename)}"
+                if thumbnails_dir:
+                    # Look for thumbnail by audio file stem
+                    audio_stem = Path(audio_file).stem
+                    for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                        thumb_path = Path(thumbnails_dir) / f"{audio_stem}{ext}"
+                        if thumb_path.exists():
+                            image_url = f"{self.base_url}/thumbnails/{quote(thumb_path.name)}"
+                            break
+                else:
+                    stored_image_url = data.get("image_url", "")
+                    if stored_image_url:
+                        image_filename = unquote(stored_image_url.split('/')[-1])
+                        image_url = f"{self.base_url}/thumbnails/{quote(image_filename)}"
 
                 # Create episode from metadata
-                # Support both source_url (new) and youtube_url (legacy) for backward compat
-                source_url = data.get("source_url", "") or data.get("youtube_url", "")
                 episode = Episode(
                     title=data.get("title", "Untitled"),
                     description=data.get("description", ""),
@@ -215,6 +275,7 @@ class PodcastFeed:
                     file_size=data.get("file_size", 0),
                     source_url=source_url,
                     image_url=image_url,
+                    video_id=video_id,
                 )
 
                 self.add_episode(episode)
@@ -222,6 +283,8 @@ class PodcastFeed:
             except Exception as e:
                 logger.error(f"Error loading metadata from {json_file}: {e}")
 
+        if migrated > 0:
+            logger.info(f"Migrated {migrated} episode(s) to video_id filenames")
         if skipped > 0:
             logger.info(f"Skipped {skipped} episode(s) with missing audio files")
         logger.info(f"Loaded {len(self.episodes)} episodes from metadata")
@@ -239,6 +302,7 @@ def save_episode_metadata(episode: Episode, metadata_file: str):
         "file_size": episode.file_size,
         "source_url": episode.source_url,
         "image_url": episode.image_url,
+        "video_id": episode.video_id,
     }
 
     os.makedirs(os.path.dirname(metadata_file), exist_ok=True)

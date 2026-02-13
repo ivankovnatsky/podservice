@@ -48,7 +48,11 @@ class PodService:
         )
 
         # Load existing episodes from metadata
-        self.feed.load_episodes_from_metadata(str(self.metadata_dir))
+        self.feed.load_episodes_from_metadata(
+            str(self.metadata_dir),
+            audio_dir=self.config.storage.audio_dir,
+            thumbnails_dir=self.config.storage.thumbnails_dir,
+        )
 
         # Initialize downloader
         self.downloader = MediaDownloader(

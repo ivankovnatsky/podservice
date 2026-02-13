@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from .config import ServiceConfig
 from .feed import Episode, PodcastFeed, save_episode_metadata
-from .utils import download_image, sanitize_filename
+from .utils import download_image, extract_video_id, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -773,7 +773,11 @@ class PodcastServer:
 
                 # Reload episodes from metadata to update the feed
                 self.feed.episodes.clear()
-                self.feed.load_episodes_from_metadata(str(metadata_dir))
+                self.feed.load_episodes_from_metadata(
+                    str(metadata_dir),
+                    audio_dir=self.config.storage.audio_dir,
+                    thumbnails_dir=self.config.storage.thumbnails_dir,
+                )
 
                 return redirect("/episodes?success=1")
 
@@ -969,16 +973,14 @@ class PodcastServer:
                             except Exception:
                                 continue
 
-                # Sanitize filename
-                safe_title = sanitize_filename(title)
-                if not safe_title:
-                    safe_title = "untitled"
-
                 # Determine audio file extension - accept any audio format
                 original_filename = secure_filename(audio_file.filename)
                 file_ext = Path(original_filename).suffix.lower()
                 if not file_ext:
                     file_ext = ".mp3"  # Default if no extension
+
+                # Use video_id for filename
+                video_id = extract_video_id(source_url) if source_url else extract_video_id(title)
 
                 # Ensure directories exist
                 audio_dir = Path(self.config.storage.audio_dir)
@@ -989,12 +991,12 @@ class PodcastServer:
                 thumbnails_dir.mkdir(parents=True, exist_ok=True)
 
                 # Save audio file
-                audio_path = audio_dir / f"{safe_title}{file_ext}"
+                audio_path = audio_dir / f"{video_id}{file_ext}"
 
                 # Handle filename collisions
                 counter = 1
                 while audio_path.exists():
-                    audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
+                    audio_path = audio_dir / f"{video_id}_{counter}{file_ext}"
                     counter += 1
 
                 audio_file.save(str(audio_path))
@@ -1032,10 +1034,11 @@ class PodcastServer:
                     file_size=file_size,
                     source_url=source_url,
                     image_url=episode_image_url,
+                    video_id=video_id,
                 )
 
                 # Save metadata
-                metadata_file = metadata_dir / f"{audio_path.stem}.json"
+                metadata_file = metadata_dir / f"{video_id}.json"
                 save_episode_metadata(episode, str(metadata_file))
 
                 # Add to feed

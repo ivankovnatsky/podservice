@@ -1,9 +1,11 @@
 """Shared utility functions for podservice."""
 
+import hashlib
 import logging
 import re
 from pathlib import Path
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -14,6 +16,32 @@ try:
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
+
+
+def extract_video_id(source_url: str) -> str:
+    """Extract a URL-safe ID from a source URL.
+
+    For YouTube URLs, extracts the video ID (e.g., 'BxLIdU68xQM').
+    For other URLs, returns a short hash of the URL.
+    """
+    if not source_url:
+        return hashlib.sha256(str(id(source_url)).encode()).hexdigest()[:12]
+
+    parsed = urlparse(source_url)
+    hostname = parsed.hostname or ""
+
+    # YouTube: youtube.com/watch?v=ID or youtu.be/ID
+    if "youtube.com" in hostname or "youtu.be" in hostname:
+        if "youtu.be" in hostname:
+            video_id = parsed.path.lstrip("/")
+            if video_id:
+                return video_id
+        qs = parse_qs(parsed.query)
+        if "v" in qs and qs["v"]:
+            return qs["v"][0]
+
+    # Fallback: short hash of the URL
+    return hashlib.sha256(source_url.encode()).hexdigest()[:12]
 
 
 def sanitize_filename(filename: str) -> str:

@@ -11,7 +11,7 @@ from urllib.parse import quote
 import yt_dlp
 
 from .feed import Episode, save_episode_metadata
-from .utils import convert_thumbnail_to_jpeg, sanitize_filename
+from .utils import convert_thumbnail_to_jpeg, extract_video_id, sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -125,14 +125,13 @@ class MediaDownloader:
             # YouTube only provides date (no time), so we use download time instead
             pub_date = datetime.now()
 
-            # Sanitize title for filename
-            safe_title = sanitize_filename(title)
+            # Use video_id as filename (URL-safe, no special characters)
+            video_id = info.get("id", "") or extract_video_id(url)
 
-            # Update output template with sanitized filename
-            # Set different paths for audio and thumbnail
+            # Update output template with video_id filename
             ydl_opts["outtmpl"] = {
-                "default": str(self.output_dir / f"{safe_title}.%(ext)s"),
-                "thumbnail": str(self.thumbnails_dir / f"{safe_title}.%(ext)s"),
+                "default": str(self.output_dir / f"{video_id}.%(ext)s"),
+                "thumbnail": str(self.thumbnails_dir / f"{video_id}.%(ext)s"),
             }
 
             # Second pass: Download with proper filenames
@@ -142,14 +141,12 @@ class MediaDownloader:
             logger.debug(f"Download completed")
 
             # Find the downloaded audio file (should be .mp3 after post-processing)
-            audio_file = self.output_dir / f"{safe_title}.mp3"
+            audio_file = self.output_dir / f"{video_id}.mp3"
 
             # Sometimes yt-dlp doesn't follow the exact template
-            # Try to find the file with a similar name
             if not audio_file.exists():
                 logger.debug(f"Expected file not found: {audio_file}")
-                # Try to find by pattern
-                matches = list(self.output_dir.glob(f"{safe_title}*.mp3"))
+                matches = list(self.output_dir.glob(f"{video_id}*.mp3"))
                 if matches:
                     audio_file = matches[0]
                     logger.debug(f"Found alternative file: {audio_file}")
@@ -164,7 +161,7 @@ class MediaDownloader:
             # Find the downloaded thumbnail (yt-dlp downloads various formats)
             thumbnail_file = None
             for ext in ['.jpg', '.jpeg', '.png', '.webp']:
-                thumb_path = self.thumbnails_dir / f"{safe_title}{ext}"
+                thumb_path = self.thumbnails_dir / f"{video_id}{ext}"
                 if thumb_path.exists():
                     thumbnail_file = thumb_path
                     logger.debug(f"Found thumbnail: {thumb_path.name}")
@@ -198,10 +195,11 @@ class MediaDownloader:
                 file_size=file_size,
                 source_url=url,
                 image_url=image_url,
+                video_id=video_id,
             )
 
-            # Save metadata
-            metadata_file = self.metadata_dir / f"{audio_file.stem}.json"
+            # Save metadata using video_id as filename
+            metadata_file = self.metadata_dir / f"{video_id}.json"
             save_episode_metadata(episode, str(metadata_file))
 
             logger.info(
