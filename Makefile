@@ -37,6 +37,13 @@ format:
 	@nix develop --command ruff check --fix .
 	@nix develop --command ruff format .
 
+.PHONY: update
+update:
+	$(eval LATEST_COMMIT := $(shell gh api repos/NixOS/nixpkgs/commits/master --jq '.sha'))
+	@echo "Updating nixpkgs to $(LATEST_COMMIT)"
+	@sed 's|nixpkgs.url = "github:NixOS/nixpkgs/.*"|nixpkgs.url = "github:NixOS/nixpkgs/$(LATEST_COMMIT)"|' flake.nix > flake.nix.tmp
+	@mv flake.nix.tmp flake.nix
+
 .PHONY: bump
 bump:
 	$(eval LATEST_RELEASE := $(shell gh release list -L 1 | awk '{print $$1}' | sed 's/v//'))
@@ -69,5 +76,6 @@ help:
 	@echo "  make format       - Format code with ruff"
 	@echo ""
 	@echo "Release:"
+	@echo "  make update       - Update pinned nixpkgs to latest master"
 	@echo "  make bump         - Bump version"
 	@echo "  make release      - Create new release"
