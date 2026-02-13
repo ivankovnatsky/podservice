@@ -18,8 +18,9 @@ except ImportError:
 
 def sanitize_filename(filename: str) -> str:
     """Sanitize filename to be filesystem-safe."""
-    # Remove or replace problematic characters
-    filename = re.sub(r'[<>:"/\\|?*]', "", filename)
+    # Remove characters problematic for filesystems and URLs
+    # #?&@% break URL parsing (fragment, query, userinfo, encoding)
+    filename = re.sub(r'[<>:"/\\|?*#&@%]', "", filename)
     # Replace multiple spaces with single space
     filename = re.sub(r"\s+", " ", filename)
     # Trim and limit length
