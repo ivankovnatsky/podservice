@@ -626,10 +626,26 @@ class PodcastServer:
                         if not thumbnail_html:
                             thumbnail_html = '<div class="thumbnail-placeholder" style="width: 60px; height: 60px; background-color: #ddd; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 24px;">🎵</div>'
 
+                        # Look up episode title from metadata
+                        episode_title = ""
+                        meta_file = metadata_dir / f"{file.stem}.json"
+                        if meta_file.exists():
+                            try:
+                                with open(meta_file) as mf:
+                                    meta = json.load(mf)
+                                    episode_title = meta.get("title", "")
+                            except Exception:
+                                pass
+
+                        title_html = f'<div style="font-weight: 500;">{episode_title}</div>' if episode_title else ""
+
                         files.append(
                             f'''<li style="margin: 15px 0; display: flex; align-items: center; gap: 12px;">
                                 {thumbnail_html}
-                                <a href="/audio/{file.name}" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{file.name}</a>
+                                <div style="flex: 1; min-width: 0; overflow: hidden;">
+                                    {title_html}
+                                    <a href="/audio/{file.name}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-size: {'12px; color: #888' if episode_title else '14px'};">{file.name}</a>
+                                </div>
                                 <span style="color: #666; white-space: nowrap;">({size_mb:.1f} MB)</span>
                                 <form method="POST" action="/delete-episode" style="margin: 0;" onsubmit="return confirm('Delete this episode? This cannot be undone.');">
                                     <input type="hidden" name="filename" value="{file.name}">
