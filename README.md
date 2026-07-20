@@ -133,10 +133,14 @@ flowchart LR
 
     subgraph Podservice
         Web --> Publisher["RabbitMQ publisher"]
+        Web -->|"manual upload"| Media["Audio, metadata, and thumbnails"]
+        Web -->|"adds uploaded episode"| Feed["RSS feed"]
         Consumer["RabbitMQ consumer"] --> Worker["Download worker"]
         Worker --> Tools["yt-dlp and ffmpeg"]
-        Tools --> Media["Audio, metadata, and thumbnails"]
-        Media --> Feed["RSS feed"]
+        Tools --> Media
+        Worker -->|"adds downloaded episode"| Feed
+        Media -->|"audio and artwork responses"| Web
+        Feed -->|"feed.xml response"| Web
 
         Web -. "download.requested" .-> Events["SQLite event store and outbox"]
         Consumer -. "lifecycle events" .-> Events
@@ -148,14 +152,18 @@ flowchart LR
     end
 
     subgraph RabbitMQ
-        Rabbit["RabbitMQ broker"] --> Exchange["Command exchange"]
+        Rabbit["RabbitMQ broker"] --- Exchange["Command exchange"]
+        Rabbit --- RetryExchange["Retry exchange"]
+        Rabbit --- DeadExchange["Dead-letter exchange"]
         Exchange --> Downloads["Download queue"]
-        Consumer -->|"failed attempt"| Retries["TTL retry queues"]
+        Consumer -->|"failed attempt"| RetryExchange
+        RetryExchange --> Retries["TTL retry queues"]
         Retries -->|"delayed redelivery"| Exchange
-        Consumer -->|"retries exhausted"| Dead["Dead-letter queue"]
+        Consumer -->|"retries exhausted"| DeadExchange
+        DeadExchange --> Dead["Dead-letter queue"]
     end
 
-    Publisher -->|"confirmed persistent job"| Rabbit
+    Publisher -->|"confirmed persistent job"| Exchange
     Downloads --> Consumer
 
     subgraph Kafka
@@ -165,7 +173,6 @@ flowchart LR
     Outbox -->|"confirmed event"| KafkaBroker
     Topic --> Projection
 
-    Feed --> Proxy
     Status -->|"management API"| Rabbit
     Status -->|"broker, topic, and lag probes"| KafkaBroker
 
