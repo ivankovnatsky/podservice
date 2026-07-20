@@ -695,6 +695,55 @@ class TestAudioUpload:
         assert response.status_code == 302
         assert list(Path(test_config.storage.audio_dir).glob("*.mp3"))
 
+    def test_api_upload_emits_lifecycle_events(self, test_config, test_feed):
+        emit = Mock()
+        server = PodcastServer(test_config, test_feed, emit_upload_event=emit)
+        server.app.config["TESTING"] = True
+
+        with server.app.test_client() as client:
+            response = client.post(
+                "/api/episodes",
+                data={
+                    "audio": (io.BytesIO(b"audio"), "via-api.mp3"),
+                    "title": "Via API",
+                },
+                content_type="multipart/form-data",
+            )
+
+        assert response.status_code == 201
+        calls = [
+            (call.kwargs["event_type"], call.kwargs["filename"])
+            for call in emit.call_args_list
+        ]
+        assert calls == [
+            ("upload.received", "via-api.mp3"),
+            ("upload.stored", "via-api.mp3"),
+        ]
+
+    def test_api_upload_failure_resolves_the_received_event(
+        self, test_config, test_feed
+    ):
+        emit = Mock()
+        server = PodcastServer(test_config, test_feed, emit_upload_event=emit)
+        server.app.config["TESTING"] = True
+
+        with patch(
+            "podservice.server.save_episode_metadata", side_effect=OSError("boom")
+        ):
+            with server.app.test_client() as client:
+                response = client.post(
+                    "/api/episodes",
+                    data={
+                        "audio": (io.BytesIO(b"audio"), "doomed.mp3"),
+                        "title": "Doomed",
+                    },
+                    content_type="multipart/form-data",
+                )
+
+        assert response.status_code == 500
+        types = [call.kwargs["event_type"] for call in emit.call_args_list]
+        assert types == ["upload.received", "upload.failed"]
+
     def test_partial_batch_redirect_is_url_encoded(self, test_config, test_feed):
         server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
 

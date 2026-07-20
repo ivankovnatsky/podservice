@@ -413,7 +413,12 @@ class PodcastServer:
                     <td><span class="event-type">{escape(event.event_type)}</span></td>
                     <td class="technical">{escape(event.job_id)}</td>
                     <td>{event.attempt}</td>
-                    <td><span class="source-type">{escape(event.source_type)}</span></td>
+                    <td><span class="source-type">{
+                    escape(event.source_type)
+                }</span></td>
+                    <td class="technical" title="{escape(event.batch_id or "")}">{
+                    escape((event.batch_id or "")[:8])
+                }</td>
                     <td class="source">{escape(event.source)}</td>
                     <td>{escape(event.detail or "")}</td>
                 </tr>
@@ -421,7 +426,7 @@ class PodcastServer:
                 for event in events
             )
             if not event_rows:
-                event_rows = '<tr><td colspan="7" class="empty">No lifecycle events projected yet.</td></tr>'
+                event_rows = '<tr><td colspan="8" class="empty">No lifecycle events projected yet.</td></tr>'
             return f"""
             <!doctype html>
             <html>
@@ -508,7 +513,7 @@ class PodcastServer:
                 </section>
                 <section class="panel">
                     <h2>Recent Kafka lifecycle events</h2>
-                    <table><thead><tr><th>Time</th><th>Event</th><th>Job</th><th>Attempt</th><th>Type</th><th>Source</th><th>Detail</th></tr></thead>
+                    <table><thead><tr><th>Time</th><th>Event</th><th>Job</th><th>Attempt</th><th>Type</th><th>Batch</th><th>Source</th><th>Detail</th></tr></thead>
                     <tbody>{event_rows}</tbody></table>
                 </section>
             </body>
@@ -754,7 +759,34 @@ class PodcastServer:
                     error:
                       type: string
               503:
-                description: Download queue unavailable
+                description: >
+                  Download queue unavailable, or accepted only part of the
+                  batch. Both cases return 503; a partial batch is
+                  distinguished by the presence of accepted_jobs and
+                  unaccepted_urls. Accepted jobs are already queued and must
+                  not be resubmitted; retry only unaccepted_urls.
+                schema:
+                  type: object
+                  properties:
+                    success:
+                      type: boolean
+                    error:
+                      type: string
+                    accepted_jobs:
+                      type: array
+                      description: Present only on a partial batch
+                      items:
+                        type: object
+                        properties:
+                          job_id:
+                            type: string
+                          url:
+                            type: string
+                    unaccepted_urls:
+                      type: array
+                      description: Present only on a partial batch
+                      items:
+                        type: string
             """
             try:
                 data = request.get_json(silent=True)
@@ -1269,6 +1301,11 @@ class PodcastServer:
         def api_create_episode():
             """
             Create a new episode from an uploaded audio file
+
+            Emits upload.received on acceptance, then upload.stored once the
+            episode is in the feed, or upload.failed if the upload does not
+            result in a stored episode. Events are grouped by batch_id and
+            appear on the Data Status page.
             ---
             tags:
               - Episodes
@@ -1351,6 +1388,9 @@ class PodcastServer:
               500:
                 description: Server error
             """
+            job_id = None
+            batch_id = None
+            submitted_filename = ""
             try:
                 # Validate required fields
                 if "audio" not in request.files:
@@ -1359,10 +1399,18 @@ class PodcastServer:
                     ), 400
 
                 audio_file = request.files["audio"]
-                if audio_file.filename == "":
+                if not audio_file.filename:
                     return jsonify(
                         {"success": False, "error": "No audio file selected"}
                     ), 400
+
+                # API uploads join the same lifecycle stream as form uploads.
+                submitted_filename = audio_file.filename[:MAX_SUBMITTED_FILENAME]
+                job_id = str(uuid4())
+                batch_id = str(uuid4())
+                self._emit_upload(
+                    "upload.received", job_id, submitted_filename, batch_id
+                )
 
                 title = request.form.get("title", "").strip()
                 if not title:
@@ -1412,6 +1460,15 @@ class PodcastServer:
                                     if existing_guid == guid:
                                         logger.info(
                                             f"Episode already exists with GUID: {guid}"
+                                        )
+                                        # Resolve the received event; nothing
+                                        # was stored for this upload.
+                                        self._emit_upload(
+                                            "upload.failed",
+                                            job_id,
+                                            submitted_filename,
+                                            batch_id,
+                                            detail="Episode already exists",
                                         )
                                         return jsonify(
                                             {
@@ -1509,6 +1566,7 @@ class PodcastServer:
                 self.feed.add_episode(episode)
 
                 logger.info(f"Created episode via API: {title}")
+                self._emit_upload("upload.stored", job_id, submitted_filename, batch_id)
 
                 return jsonify(
                     {
@@ -1525,6 +1583,14 @@ class PodcastServer:
 
             except Exception as e:
                 logger.error(f"Error creating episode via API: {e}", exc_info=True)
+                if job_id is not None:
+                    self._emit_upload(
+                        "upload.failed",
+                        job_id,
+                        submitted_filename,
+                        batch_id,
+                        detail=str(e),
+                    )
                 return jsonify({"success": False, "error": str(e)}), 500
 
     def _data_status(
