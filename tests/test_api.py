@@ -679,6 +679,22 @@ class TestAudioUpload:
         ]
         assert stored == ["first.mp3", "third.mp3"]
 
+    def test_upload_needs_no_csrf_token(self, test_config, test_feed):
+        emit = Mock()
+        server = PodcastServer(test_config, test_feed, emit_upload_event=emit)
+        server.app.config["TESTING"] = True
+
+        # Matches /api/episodes, which accepts the same upload unauthenticated.
+        with server.app.test_client() as client:
+            response = client.post(
+                "/upload-audio",
+                data={"audio": (io.BytesIO(b"audio"), "tokenless.mp3")},
+                content_type="multipart/form-data",
+            )
+
+        assert response.status_code == 302
+        assert list(Path(test_config.storage.audio_dir).glob("*.mp3"))
+
     def test_partial_batch_redirect_is_url_encoded(self, test_config, test_feed):
         server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
 

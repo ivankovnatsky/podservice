@@ -519,8 +519,6 @@ class PodcastServer:
         def add_url():
             """Queue a URL for download."""
             try:
-                if not self._valid_csrf_token():
-                    return Response("Forbidden", status=403)
                 url = request.form.get("url", "").strip()
 
                 if not url:
@@ -550,8 +548,6 @@ class PodcastServer:
         def upload_audio():
             """Upload audio files via web form."""
             try:
-                if not self._valid_csrf_token():
-                    return Response("Forbidden", status=403)
                 # Get all uploaded audio files
                 audio_files = request.files.getlist("audio")
                 if not audio_files or all(f.filename == "" for f in audio_files):
