@@ -1,0 +1,9 @@
+{
+  "flowchart": {
+    "htmlLabels": false,
+    "useMaxWidth": true,
+    "curve": "basis",
+    "nodeSpacing": 45,
+    "rankSpacing": 60
+  }
+}

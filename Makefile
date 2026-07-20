@@ -36,6 +36,36 @@ test:
 format:
 	@nix develop --command treefmt
 
+ARCHITECTURE_DIR ?= /tmp
+ARCHITECTURE_SVG := $(ARCHITECTURE_DIR)/PodserviceArchitecture.svg
+ARCHITECTURE_PNG := $(ARCHITECTURE_DIR)/PodserviceArchitecture.png
+ARCHITECTURE_HTML := $(ARCHITECTURE_DIR)/PodserviceArchitecture.html
+
+.PHONY: architecture
+architecture: $(ARCHITECTURE_SVG) $(ARCHITECTURE_PNG) $(ARCHITECTURE_HTML)
+
+$(ARCHITECTURE_SVG): README.md mermaid.json Makefile
+	@awk '/^```mermaid/ { inside=1; next } inside && /^```/ { exit } inside { print }' README.md | nix develop --command mmdc -i - -o "$@" -t default -b white -c mermaid.json -w 1800 -H 1100
+
+$(ARCHITECTURE_PNG): README.md mermaid.json Makefile
+	@awk '/^```mermaid/ { inside=1; next } inside && /^```/ { exit } inside { print }' README.md | nix develop --command mmdc -i - -o "$@" -t default -b white -c mermaid.json -w 1800 -H 1100 -s 2
+
+$(ARCHITECTURE_HTML): $(ARCHITECTURE_SVG) Makefile
+	@printf '%s\n' \
+		'<!doctype html>' \
+		'<html lang="en">' \
+		'<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Podservice architecture</title></head>' \
+		'<body style="margin:0;background:white"><img src="PodserviceArchitecture.svg" alt="Podservice architecture" style="display:block;width:100vw;height:100vh;object-fit:contain"></body>' \
+		'</html>' > "$@"
+
+.PHONY: architecture-open
+architecture-open: architecture
+	@case "$$(uname -s)" in \
+		Darwin) open "$(ARCHITECTURE_HTML)" ;; \
+		Linux) xdg-open "$(ARCHITECTURE_HTML)" ;; \
+		*) echo "Unsupported platform: $$(uname -s)"; exit 1 ;; \
+	esac
+
 .PHONY: update
 update:
 	$(eval LATEST_COMMIT := $(shell gh api repos/NixOS/nixpkgs/commits/master --jq '.sha'))
@@ -73,6 +103,8 @@ help:
 	@echo "  make clean        - Clean up temp files and cache"
 	@echo "  make test         - Run tests"
 	@echo "  make format       - Format code with ruff"
+	@echo "  make architecture - Generate architecture SVG, PNG, and HTML under /tmp"
+	@echo "  make architecture-open - Generate and open temporary architecture media"
 	@echo ""
 	@echo "Release:"
 	@echo "  make update       - Update pinned nixpkgs to latest master"

@@ -126,59 +126,48 @@ log_level: "INFO"
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Browser["Browser / API client"] --> Proxy["Caddy"]
-    Podcast["Podcast client"] --> Proxy
-    Proxy --> Web["Podservice web and API"]
-
-    subgraph Podservice
-        Web --> Publisher["RabbitMQ publisher"]
-        Web -->|"manual upload"| Media["Audio, metadata, and thumbnails"]
-        Web -->|"adds uploaded episode"| Feed["RSS feed"]
-        Consumer["RabbitMQ consumer"] --> Worker["Download worker"]
-        Worker --> Tools["yt-dlp and ffmpeg"]
-        Tools --> Media
-        Worker -->|"adds downloaded episode"| Feed
-        Media -->|"audio and artwork responses"| Web
-        Feed -->|"feed.xml response"| Web
-
-        Web -. "download.requested" .-> Events["SQLite event store and outbox"]
-        Consumer -. "lifecycle events" .-> Events
-        Events --> Outbox["Kafka outbox publisher"]
-        Projection["Kafka projection consumer"] --> Events
-
-        Web --> Status["Data Status UI and API"]
-        Status --> Events
+flowchart TB
+    subgraph Access
+        direction LR
+        Clients["Browser · API client · podcast app"] --> Caddy["Caddy"]
+        Caddy --> Web["Podservice web · API · feed · media"]
     end
 
-    subgraph RabbitMQ
-        Rabbit["RabbitMQ broker"] --- Exchange["Command exchange"]
-        Rabbit --- RetryExchange["Retry exchange"]
-        Rabbit --- DeadExchange["Dead-letter exchange"]
-        Exchange --> Downloads["Download queue"]
-        Consumer -->|"failed attempt"| RetryExchange
-        RetryExchange --> Retries["TTL retry queues"]
-        Retries -->|"delayed redelivery"| Exchange
-        Consumer -->|"retries exhausted"| DeadExchange
-        DeadExchange --> Dead["Dead-letter queue"]
+    subgraph Processing["Downloads and uploads"]
+        direction LR
+        Rabbit["RabbitMQ<br/>commands · retries · dead letters"] --> Consumer["Download consumer"]
+        Consumer --> Worker["Download worker"]
+        Worker --> Tools["yt-dlp + ffmpeg"]
+        Tools --> Files["Audio · metadata · thumbnails"]
+        Worker --> Feed["RSS feed"]
     end
 
-    Publisher -->|"confirmed persistent job"| Exchange
-    Downloads --> Consumer
+    Web -->|"confirmed URL jobs"| Rabbit
+    Web -->|"manual uploads"| Files
+    Web -->|"uploaded episodes"| Feed
 
-    subgraph Kafka
-        KafkaBroker["Kafka broker"] --- Topic["Lifecycle topic"]
+    subgraph Eventing["Lifecycle events"]
+        direction LR
+        SQLite["SQLite<br/>event store · outbox · dashboard model"] --> Outbox["Kafka outbox publisher"]
+        Outbox --> Kafka["Kafka lifecycle topic"]
+        Kafka --> Projection["Projection consumer"]
     end
 
-    Outbox -->|"confirmed event"| KafkaBroker
-    Topic --> Projection
+    Web -. "download.requested" .-> SQLite
+    Consumer -. "lifecycle events" .-> SQLite
 
-    Status -->|"management API"| Rabbit
-    Status -->|"broker, topic, and lag probes"| KafkaBroker
+    subgraph Observability
+        direction LR
+        Status["Data Status"]
+        Kuma["Uptime Kuma"]
+    end
 
-    Kuma["Uptime Kuma"] -. "HTTP and TCP checks" .-> Proxy
-    Kuma -.-> Rabbit
-    Kuma -.-> KafkaBroker
+    Rabbit -->|"queue health"| Status
+    SQLite -->|"analytics"| Status
+    Kafka -->|"topic and lag"| Status
+    Caddy -. "HTTP" .-> Kuma
+    Rabbit -. "TCP 5672" .-> Kuma
+    Kafka -. "TCP 9092" .-> Kuma
 ```
 
 RabbitMQ owns durable download commands and retry delivery. Kafka keeps the
@@ -252,6 +241,8 @@ make serve   # Run with config.example.yaml
 make info    # Show resolved configuration
 make test    # Run the test suite
 make format  # Format and lint Python files
+make architecture       # Generate architecture SVG, PNG, and HTML under /tmp
+make architecture-open  # Generate and open the full-screen viewer
 make dev     # Enter the Nix development shell
 ```
 

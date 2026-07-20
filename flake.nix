@@ -67,16 +67,18 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            pythonEnv
-            ffmpeg # Required by yt-dlp for audio conversion
+          buildInputs =
+            (with pkgs; [
+              pythonEnv
+              ffmpeg # Required by yt-dlp for audio conversion
 
-            # Formatting tools
-            treefmt
-            nixfmt-rfc-style
-            prettier
-            ruff
-          ];
+              # Formatting tools
+              treefmt
+              nixfmt-rfc-style
+              prettier
+              ruff
+            ])
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.mermaid-cli ];
 
           shellHook = ''
             echo "Pod Service development environment"
