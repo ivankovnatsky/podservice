@@ -55,6 +55,19 @@ SWAGGER_CONFIG = {
     "specs_route": "/apidocs/",
 }
 
+AUDIO_EXTENSIONS = [
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".opus",
+    ".aac",
+    ".ogg",
+    ".flac",
+    ".wma",
+    ".aiff",
+    ".webm",
+]
+
 SWAGGER_TEMPLATE = {
     "info": {
         "title": "Podservice API",
@@ -107,6 +120,30 @@ class PodcastServer:
             success = request.args.get("success")
             error = request.args.get("error")
 
+            try:
+                recent = self._recent_episodes()
+            except Exception:
+                logger.exception("Failed to collect recent episodes")
+                recent = []
+
+            if recent:
+                cards = "\n".join(
+                    f'''<a class="episode-card" href="{ep["url"]}" title="{
+                        escape(ep["title"])
+                    }">
+                        {
+                        f'<img src="{ep["thumbnail"]}" alt="">'
+                        if ep["thumbnail"]
+                        else '<div class="episode-art episode-art-placeholder">🎵</div>'
+                    }
+                        <span class="episode-title">{escape(ep["title"])}</span>
+                    </a>'''
+                    for ep in recent
+                )
+                episodes_row = f'<div class="episode-row">{cards}</div>'
+            else:
+                episodes_row = '<p class="episode-empty">No episodes yet.</p>'
+
             message = ""
             if success:
                 if success == "1":
@@ -125,11 +162,23 @@ class PodcastServer:
                 <style>
                     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background-color: #fff; color: #333; }}
                     h1 {{ color: #333; }}
-                    .links {{ margin: 30px 0; }}
+                    .links {{ margin: 40px 0 20px 0; padding-top: 30px; border-top: 1px solid #eee; }}
                     .links ul {{ list-style: none; padding: 0; }}
                     .links li {{ margin: 15px 0; }}
                     .links a {{ color: #007bff; text-decoration: none; font-size: 18px; display: inline-block; padding: 5px 0; }}
                     .links a:hover {{ text-decoration: underline; }}
+                    .section {{ margin: 40px 0 20px 0; padding-top: 30px; border-top: 1px solid #eee; }}
+                    .section-header {{ display: flex; justify-content: space-between; align-items: center; gap: 15px; }}
+                    .section-header h2 {{ margin: 0; }}
+                    .view-all {{ background-color: #000; color: #fff; text-decoration: none; padding: 8px 16px; border-radius: 4px; font-size: 14px; white-space: nowrap; }}
+                    .view-all:hover {{ background-color: #333; text-decoration: none; }}
+                    .episode-row {{ display: flex; gap: 14px; overflow-x: auto; padding: 15px 0 5px 0; }}
+                    .episode-card {{ flex: 0 0 auto; width: 110px; text-decoration: none; color: inherit; }}
+                    .episode-card:hover .episode-title {{ text-decoration: underline; }}
+                    .episode-card img, .episode-art {{ width: 110px; height: 110px; border-radius: 6px; object-fit: cover; border: 1px solid #e0e0e0; display: block; }}
+                    .episode-art-placeholder {{ background-color: #ddd; display: flex; align-items: center; justify-content: center; font-size: 32px; }}
+                    .episode-title {{ display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; margin-top: 6px; }}
+                    .episode-empty {{ color: #666; }}
                     .form-group {{ margin: 40px 0 20px 0; padding-top: 30px; border-top: 1px solid #eee; }}
                     .input-wrapper {{ position: relative; display: flex; gap: 10px; }}
                     input[type="text"], textarea {{ flex: 1; padding: 12px; font-size: 16px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fff; color: #333; width: 100%; }}
@@ -141,7 +190,7 @@ class PodcastServer:
                         body {{ background-color: #1a1a1a; color: #e0e0e0; }}
                         h1, h2 {{ color: #e0e0e0; }}
                         .links a {{ color: #4a9eff; }}
-                        .form-group {{ border-top-color: #333; }}
+                        .form-group, .section, .links {{ border-top-color: #333; }}
                         input[type="text"], input[type="file"], textarea {{ background-color: #2a2a2a; color: #e0e0e0; border-color: #444; }}
                         button {{ background-color: #0d6efd; }}
                         button:hover {{ background-color: #0b5ed7; }}
@@ -149,6 +198,11 @@ class PodcastServer:
                         #drop-zone {{ background-color: #2a2a2a !important; border-color: #444 !important; }}
                         #drop-zone span {{ color: #e0e0e0; }}
                         #drop-zone strong {{ color: #4a9eff !important; }}
+                        .view-all {{ background-color: #000; color: #fff; border: 1px solid #444; }}
+                        .view-all:hover {{ background-color: #222; }}
+                        .episode-card img, .episode-art {{ border-color: #333; }}
+                        .episode-art-placeholder {{ background-color: #333; }}
+                        .episode-empty {{ color: #999; }}
                     }}
 
                     /* Mobile styles */
@@ -170,11 +224,18 @@ class PodcastServer:
 
                 {message}
 
+                <div class="section">
+                    <div class="section-header">
+                        <h2>Episodes</h2>
+                        <a class="view-all" href="/episodes">View all</a>
+                    </div>
+                    {episodes_row}
+                </div>
+
                 <div class="links">
                     <h2>Internal</h2>
                     <ul>
                         <li><a href="/feed.xml">📡 Podcast Feed</a></li>
-                        <li><a href="/episodes">🎵 Episodes</a></li>
                         <li><a href="/status">📊 Data Status</a></li>
                         <li><a href="/apidocs/">📚 API Docs</a></li>
                     </ul>
@@ -865,18 +926,7 @@ class PodcastServer:
                 for file in sorted(
                     audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True
                 ):
-                    if file.is_file() and file.suffix.lower() in [
-                        ".mp3",
-                        ".m4a",
-                        ".wav",
-                        ".opus",
-                        ".aac",
-                        ".ogg",
-                        ".flac",
-                        ".wma",
-                        ".aiff",
-                        ".webm",
-                    ]:
+                    if file.is_file() and file.suffix.lower() in AUDIO_EXTENSIONS:
                         file_size = file.stat().st_size
                         total_size_bytes += file_size
                         size_mb = file_size / (1024 * 1024)
@@ -1464,6 +1514,49 @@ class PodcastServer:
                 return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
             size /= 1024
         return f"{size_bytes} B"
+
+    def _recent_episodes(self, limit: int = 8) -> list[dict]:
+        """Newest episodes with title and thumbnail, for the index page row."""
+        audio_dir = Path(self.config.storage.audio_dir)
+        if not audio_dir.exists():
+            return []
+
+        metadata_dir = Path(self.config.storage.metadata_dir)
+        thumbnails_dir = Path(self.config.storage.thumbnails_dir)
+
+        audio_files = [
+            file
+            for file in audio_dir.glob("*")
+            if file.is_file() and file.suffix.lower() in AUDIO_EXTENSIONS
+        ]
+        audio_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+
+        episodes = []
+        for file in audio_files[:limit]:
+            thumbnail = None
+            for ext in (".jpg", ".jpeg", ".webp", ".png"):
+                thumb_file = thumbnails_dir / f"{file.stem}{ext}"
+                if thumb_file.exists():
+                    thumbnail = f"/thumbnails/{quote(thumb_file.name)}"
+                    break
+
+            title = ""
+            meta_file = metadata_dir / f"{file.stem}.json"
+            if meta_file.exists():
+                try:
+                    with open(meta_file) as mf:
+                        title = json.load(mf).get("title", "")
+                except Exception:
+                    logger.debug("Unreadable metadata for %s", file.name)
+
+            episodes.append(
+                {
+                    "url": f"/audio/{quote(file.name)}",
+                    "title": title or file.name,
+                    "thumbnail": thumbnail,
+                }
+            )
+        return episodes
 
     def _valid_csrf_token(self) -> bool:
         token = request.form.get("csrf_token", "")

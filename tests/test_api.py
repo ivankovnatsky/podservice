@@ -432,6 +432,42 @@ class TestQueueURLAPI:
         assert response.json["unaccepted_urls"] == ["https://example.com/two"]
 
 
+class TestIndexEpisodes:
+    def test_index_shows_episode_row_and_view_all(self, client, test_config):
+        audio_dir = Path(test_config.storage.audio_dir)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        (audio_dir / "episode.mp3").write_bytes(b"audio")
+        metadata_dir = Path(test_config.storage.metadata_dir)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        (metadata_dir / "episode.json").write_text(json.dumps({"title": "First Show"}))
+
+        response = client.get("/")
+
+        assert b"First Show" in response.data
+        assert b'class="view-all" href="/episodes"' in response.data
+        assert b'href="/audio/episode.mp3"' in response.data
+
+    def test_index_without_episodes(self, client):
+        response = client.get("/")
+
+        assert b"No episodes yet." in response.data
+
+    def test_index_escapes_episode_titles(self, client, test_config):
+        audio_dir = Path(test_config.storage.audio_dir)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        (audio_dir / "episode.mp3").write_bytes(b"audio")
+        metadata_dir = Path(test_config.storage.metadata_dir)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        (metadata_dir / "episode.json").write_text(
+            json.dumps({"title": "<script>alert(1)</script>"})
+        )
+
+        response = client.get("/")
+
+        assert b"<script>alert(1)</script>" not in response.data
+        assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in response.data
+
+
 class TestHtmlEscaping:
     def test_root_escapes_query_messages(self, client):
         response = client.get("/", query_string={"error": "<script>alert(1)</script>"})
