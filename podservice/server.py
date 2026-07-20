@@ -61,6 +61,9 @@ SWAGGER_CONFIG = {
     "specs_route": "/apidocs/",
 }
 
+# Submitted filenames are untrusted; bound them before they reach storage.
+MAX_SUBMITTED_FILENAME = 255
+
 AUDIO_EXTENSIONS = [
     ".mp3",
     ".m4a",
@@ -566,14 +569,21 @@ class PodcastServer:
                 uploaded_count = 0
                 failed_count = 0
                 for audio_file in audio_files:
-                    if audio_file.filename == "":
+                    # Werkzeug gives None, not "", when a part carries no
+                    # filename; secure_filename would then raise outside the
+                    # per-file guard below and abandon the rest of the batch.
+                    if not audio_file.filename:
                         continue
 
                     # Get file info
+                    # Events carry the name as submitted so a row is
+                    # recognisable against the local file; only the filesystem
+                    # uses the sanitized form.
+                    submitted_filename = audio_file.filename[:MAX_SUBMITTED_FILENAME]
                     original_filename = secure_filename(audio_file.filename)
                     job_id = str(uuid4())
                     self._emit_upload(
-                        "upload.received", job_id, original_filename, batch_id
+                        "upload.received", job_id, submitted_filename, batch_id
                     )
 
                     # A failure here must not abandon the rest of the batch.
@@ -647,13 +657,13 @@ class PodcastServer:
                         logger.info(f"Created episode via upload: {title}")
                         uploaded_count += 1
                         self._emit_upload(
-                            "upload.stored", job_id, original_filename, batch_id
+                            "upload.stored", job_id, submitted_filename, batch_id
                         )
                     except Exception as file_error:
                         failed_count += 1
                         logger.error(
                             "Failed to store uploaded file %s: %s",
-                            original_filename,
+                            submitted_filename,
                             file_error,
                             exc_info=True,
                         )
@@ -674,7 +684,7 @@ class PodcastServer:
                         self._emit_upload(
                             "upload.failed",
                             job_id,
-                            original_filename,
+                            submitted_filename,
                             batch_id,
                             detail=str(file_error),
                         )

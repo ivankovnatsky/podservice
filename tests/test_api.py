@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+from werkzeug.datastructures import FileStorage, MultiDict
 
 from podservice.config import PodcastConfig, ServerConfig, ServiceConfig, StorageConfig
 from podservice.events import DatabaseStatus, KafkaStatus, LifecycleEvent
@@ -629,6 +630,54 @@ class TestAudioUpload:
 
         assert not list(Path(test_config.storage.audio_dir).glob("*.mp3"))
         assert not list(Path(test_config.storage.metadata_dir).glob("*.json"))
+
+    def test_events_record_the_filename_as_submitted(self, test_config, test_feed):
+        emit = Mock()
+        server = PodcastServer(test_config, test_feed, emit_upload_event=emit)
+        # Sanitizing this name changes it, so the event must not carry that form.
+        submitted = "Rooftop Laundry, Malta 28sqm.mp3"
+
+        self._upload(server, [(io.BytesIO(b"audio"), submitted)])
+
+        assert [call.kwargs["filename"] for call in emit.call_args_list] == [
+            submitted,
+            submitted,
+        ]
+        # The file on disk still uses the sanitized name.
+        stored = list(Path(test_config.storage.audio_dir).glob("*.mp3"))
+        assert len(stored) == 1
+        assert stored[0].name != submitted
+
+    def test_none_filename_is_skipped_without_aborting_the_batch(
+        self, test_config, test_feed
+    ):
+        emit = Mock()
+        server = PodcastServer(test_config, test_feed, emit_upload_event=emit)
+        server.app.config["TESTING"] = True
+
+        # Werkzeug yields filename=None for a part sent without one, which the
+        # test client will not reproduce from a tuple, so inject it directly.
+        parts = [
+            FileStorage(io.BytesIO(b"one"), filename="first.mp3"),
+            FileStorage(io.BytesIO(b"two"), filename=None),
+            FileStorage(io.BytesIO(b"three"), filename="third.mp3"),
+        ]
+
+        with server.app.test_client() as client:
+            with patch.object(MultiDict, "getlist", return_value=parts):
+                response = client.post(
+                    "/upload-audio",
+                    data={"csrf_token": server.csrf_token},
+                    content_type="multipart/form-data",
+                )
+
+        assert response.status_code == 302
+        stored = [
+            call.kwargs["filename"]
+            for call in emit.call_args_list
+            if call.kwargs["event_type"] == "upload.stored"
+        ]
+        assert stored == ["first.mp3", "third.mp3"]
 
     def test_partial_batch_redirect_is_url_encoded(self, test_config, test_feed):
         server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
