@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -11,7 +10,7 @@ from urllib.parse import quote
 import yt_dlp
 
 from .feed import Episode, save_episode_metadata
-from .utils import convert_thumbnail_to_jpeg, extract_video_id, sanitize_filename
+from .utils import convert_thumbnail_to_jpeg, extract_video_id
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +18,9 @@ logger = logging.getLogger(__name__)
 class MediaDownloader:
     """Download media as audio using yt-dlp."""
 
-    def __init__(self, output_dir: str, base_url: str, metadata_dir: str, thumbnails_dir: str):
+    def __init__(
+        self, output_dir: str, base_url: str, metadata_dir: str, thumbnails_dir: str
+    ):
         self.output_dir = Path(output_dir)
         self.base_url = base_url
         self.metadata_dir = Path(metadata_dir)
@@ -57,30 +58,37 @@ class MediaDownloader:
             # by checking if metadata exists for this URL
             for metadata_file in self.metadata_dir.glob("*.json"):
                 try:
-                    with open(metadata_file, 'r') as f:
+                    with open(metadata_file, "r") as f:
                         data = json.load(f)
                         # Check both source_url (new) and youtube_url (legacy) for backward compat
-                        if data.get('source_url') == url or data.get('youtube_url') == url:
-                            logger.info(f"Media already downloaded, loading existing episode: {data.get('title', 'Unknown')}")
+                        if (
+                            data.get("source_url") == url
+                            or data.get("youtube_url") == url
+                        ):
+                            logger.info(
+                                f"Media already downloaded, loading existing episode: {data.get('title', 'Unknown')}"
+                            )
                             # Return the existing episode so URL gets removed from file
-                            audio_file = data.get('audio_file', '')
+                            audio_file = data.get("audio_file", "")
                             if audio_file and Path(audio_file).exists():
                                 filename = Path(audio_file).name
                                 audio_url = f"{self.base_url}/audio/{quote(filename)}"
                                 # Regenerate image URL from current base_url if thumbnail exists
-                                image_url = data.get('image_url', '')
+                                image_url = data.get("image_url", "")
                                 if image_url:
                                     # Extract just the filename and regenerate URL
-                                    image_filename = Path(image_url.split('/')[-1]).name
+                                    image_filename = Path(image_url.split("/")[-1]).name
                                     image_url = f"{self.base_url}/thumbnails/{quote(image_filename)}"
                                 return Episode(
-                                    title=data.get('title', 'Untitled'),
-                                    description=data.get('description', ''),
+                                    title=data.get("title", "Untitled"),
+                                    description=data.get("description", ""),
                                     audio_file=audio_file,
                                     audio_url=audio_url,
-                                    pub_date=datetime.fromisoformat(data.get('pub_date', datetime.now().isoformat())),
-                                    duration=data.get('duration', 0),
-                                    file_size=data.get('file_size', 0),
+                                    pub_date=datetime.fromisoformat(
+                                        data.get("pub_date", datetime.now().isoformat())
+                                    ),
+                                    duration=data.get("duration", 0),
+                                    file_size=data.get("file_size", 0),
                                     source_url=url,
                                     image_url=image_url,
                                 )
@@ -110,7 +118,7 @@ class MediaDownloader:
             logger.debug(f"Extracting info from URL: {url}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-            logger.debug(f"Info extracted successfully")
+            logger.debug("Info extracted successfully")
 
             if info is None:
                 logger.error(f"Could not extract info from {url}")
@@ -138,7 +146,7 @@ class MediaDownloader:
             logger.info(f"Downloading audio for: {title}")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-            logger.debug(f"Download completed")
+            logger.debug("Download completed")
 
             # Find the downloaded audio file (should be .mp3 after post-processing)
             audio_file = self.output_dir / f"{video_id}.mp3"
@@ -160,7 +168,7 @@ class MediaDownloader:
 
             # Find the downloaded thumbnail (yt-dlp downloads various formats)
             thumbnail_file = None
-            for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+            for ext in [".jpg", ".jpeg", ".png", ".webp"]:
                 thumb_path = self.thumbnails_dir / f"{video_id}{ext}"
                 if thumb_path.exists():
                     thumbnail_file = thumb_path
@@ -203,7 +211,7 @@ class MediaDownloader:
             save_episode_metadata(episode, str(metadata_file))
 
             logger.info(
-                f"Successfully downloaded: {title} ({file_size / (1024*1024):.1f} MB)"
+                f"Successfully downloaded: {title} ({file_size / (1024 * 1024):.1f} MB)"
             )
 
             return episode

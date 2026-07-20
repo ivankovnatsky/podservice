@@ -2,16 +2,15 @@
 
 import io
 import json
-import os
 import tempfile
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-from podservice.config import ServiceConfig, ServerConfig, PodcastConfig, StorageConfig, WatchConfig
+from podservice.config import PodcastConfig, ServerConfig, ServiceConfig, StorageConfig
 from podservice.feed import PodcastFeed
+from podservice.messaging import DownloadJob, MessagePublishError, PartialPublishError
 from podservice.server import PodcastServer
 
 
@@ -39,10 +38,6 @@ def test_config(temp_data_dir):
         storage=StorageConfig(
             data_dir=temp_data_dir,
         ),
-        watch=WatchConfig(
-            file=os.path.join(temp_data_dir, "urls.txt"),
-            enabled=False,
-        ),
     )
 
 
@@ -58,9 +53,26 @@ def test_feed(test_config):
 
 
 @pytest.fixture
-def test_server(test_config, test_feed):
+def submit_urls():
+    """Create a download job submission mock."""
+
+    def create_jobs(urls):
+        return [
+            DownloadJob(
+                job_id=f"job-{index}",
+                url=url,
+                submitted_at="2026-07-20T00:00:00+00:00",
+            )
+            for index, url in enumerate(urls, start=1)
+        ]
+
+    return Mock(side_effect=create_jobs)
+
+
+@pytest.fixture
+def test_server(test_config, test_feed, submit_urls):
     """Create a test server."""
-    return PodcastServer(test_config, test_feed)
+    return PodcastServer(test_config, test_feed, submit_urls=submit_urls)
 
 
 @pytest.fixture
@@ -306,6 +318,169 @@ class TestCreateEpisodeAPI:
 
         # Verify download_image was called
         mock_download.assert_called_once()
+
+
+class TestQueueURLAPI:
+    """Tests for URL job submission."""
+
+    def test_queue_single_url(self, client, submit_urls):
+        response = client.post(
+            "/api/urls",
+            json={"url": "https://example.com/episode"},
+        )
+
+        assert response.status_code == 202
+        assert response.json["jobs"] == [
+            {
+                "job_id": "job-1",
+                "url": "https://example.com/episode",
+            }
+        ]
+        submit_urls.assert_called_once_with(["https://example.com/episode"])
+
+    def test_queue_multiple_urls(self, client, submit_urls):
+        urls = ["https://example.com/one", "https://example.com/two"]
+        response = client.post("/api/urls", json={"urls": urls})
+
+        assert response.status_code == 202
+        assert response.json["count"] == 2
+        assert [job["job_id"] for job in response.json["jobs"]] == [
+            "job-1",
+            "job-2",
+        ]
+        submit_urls.assert_called_once_with(urls)
+
+    def test_reject_invalid_url(self, client, submit_urls):
+        response = client.post("/api/urls", json={"url": "not-a-url"})
+
+        assert response.status_code == 400
+        submit_urls.assert_not_called()
+
+    def test_reject_non_string_url(self, client, submit_urls):
+        response = client.post("/api/urls", json={"url": 42})
+
+        assert response.status_code == 400
+        submit_urls.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("body", "content_type"),
+        [
+            ("{invalid", "application/json"),
+            ("[]", "application/json"),
+            ("plain text", "text/plain"),
+        ],
+    )
+    def test_reject_invalid_json_body(self, client, submit_urls, body, content_type):
+        response = client.post(
+            "/api/urls",
+            data=body,
+            content_type=content_type,
+        )
+
+        assert response.status_code == 400
+        assert response.json["error"] == "Request body must be a JSON object"
+        submit_urls.assert_not_called()
+
+    def test_report_queue_unavailable(self, client, submit_urls):
+        submit_urls.side_effect = MessagePublishError("unavailable")
+
+        response = client.post(
+            "/api/urls",
+            json={"url": "https://example.com/episode"},
+        )
+
+        assert response.status_code == 503
+        assert response.json == {
+            "success": False,
+            "error": "Download queue is unavailable",
+        }
+
+    def test_report_partially_accepted_batch(self, client, submit_urls):
+        submit_urls.side_effect = PartialPublishError(
+            [
+                DownloadJob(
+                    job_id="accepted-1",
+                    url="https://example.com/one",
+                    submitted_at="2026-07-20T00:00:00+00:00",
+                )
+            ],
+            [
+                DownloadJob(
+                    job_id="unaccepted-2",
+                    url="https://example.com/two",
+                    submitted_at="2026-07-20T00:00:00+00:00",
+                )
+            ],
+        )
+
+        response = client.post(
+            "/api/urls",
+            json={
+                "urls": [
+                    "https://example.com/one",
+                    "https://example.com/two",
+                ]
+            },
+        )
+
+        assert response.status_code == 503
+        assert response.json["accepted_jobs"] == [
+            {"job_id": "accepted-1", "url": "https://example.com/one"}
+        ]
+        assert response.json["unaccepted_urls"] == ["https://example.com/two"]
+
+
+class TestHtmlEscaping:
+    def test_root_escapes_query_messages(self, client):
+        response = client.get("/", query_string={"error": "<script>alert(1)</script>"})
+
+        assert b"<script>alert(1)</script>" not in response.data
+        assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in response.data
+
+    def test_episode_list_escapes_query_messages(self, client, test_config):
+        audio_dir = Path(test_config.storage.audio_dir)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        filename = 'episode"><img src=x onerror=alert(2)>.mp3'
+        (audio_dir / filename).write_bytes(b"audio")
+        metadata_dir = Path(test_config.storage.metadata_dir)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+        (metadata_dir / f"{Path(filename).stem}.json").write_text(
+            json.dumps({"title": "<script>alert(1)</script>"})
+        )
+
+        response = client.get(
+            "/episodes",
+            query_string={"error": "<script>alert(1)</script>"},
+        )
+
+        assert b"<script>alert(1)</script>" not in response.data
+        assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in response.data
+        assert b"<img src=x onerror=alert(2)>" not in response.data
+
+    def test_delete_all_requires_csrf_token(self, client, test_config):
+        audio_dir = Path(test_config.storage.audio_dir)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        audio_file = audio_dir / "episode.mp3"
+        audio_file.write_bytes(b"audio")
+
+        response = client.post("/delete-all-episodes")
+
+        assert response.status_code == 403
+        assert audio_file.exists()
+
+    def test_delete_all_accepts_csrf_token(self, client, test_config, test_server):
+        audio_dir = Path(test_config.storage.audio_dir)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        audio_file = audio_dir / "episode.mp3"
+        audio_file.write_bytes(b"audio")
+
+        response = client.post(
+            "/delete-all-episodes",
+            data={"csrf_token": test_server.csrf_token},
+        )
+
+        assert response.status_code == 302
+        assert not audio_file.exists()
 
 
 class TestUtilsFunctions:

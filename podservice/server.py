@@ -3,17 +3,28 @@
 import json
 import logging
 import os
+import secrets
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Optional
 from urllib.parse import quote
 
 from flasgger import Swagger
-from flask import Flask, Response, jsonify, redirect, render_template_string, request, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    request,
+    send_from_directory,
+)
+from markupsafe import escape
 from werkzeug.utils import secure_filename
 
 from .config import ServiceConfig
 from .feed import Episode, PodcastFeed, save_episode_metadata
+from .messaging import DownloadJob, MessagePublishError, PartialPublishError
 from .utils import download_image, extract_video_id, sanitize_filename
 
 logger = logging.getLogger(__name__)
@@ -47,11 +58,20 @@ SWAGGER_TEMPLATE = {
 class PodcastServer:
     """HTTP server for podcast feed and audio files."""
 
-    def __init__(self, config: ServiceConfig, feed: PodcastFeed):
+    def __init__(
+        self,
+        config: ServiceConfig,
+        feed: PodcastFeed,
+        submit_urls: Optional[Callable[[list[str]], list[DownloadJob]]] = None,
+    ):
         self.config = config
         self.feed = feed
+        self.submit_urls = submit_urls
+        self.csrf_token = secrets.token_urlsafe(32)
         self.app = Flask(__name__)
-        self.swagger = Swagger(self.app, config=SWAGGER_CONFIG, template=SWAGGER_TEMPLATE)
+        self.swagger = Swagger(
+            self.app, config=SWAGGER_CONFIG, template=SWAGGER_TEMPLATE
+        )
         self._setup_routes()
         self.server_thread = None
 
@@ -69,9 +89,9 @@ class PodcastServer:
                 if success == "1":
                     message = '<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ Added successfully!</div>'
                 else:
-                    message = f'<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ {success} files uploaded successfully!</div>'
+                    message = f'<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ {escape(success)} files uploaded successfully!</div>'
             elif error:
-                message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 20px;">✗ Error: {error}</div>'
+                message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 20px;">✗ Error: {escape(error)}</div>'
 
             return f"""
             <html>
@@ -139,6 +159,7 @@ class PodcastServer:
                 <div class="form-group">
                     <h2>Add from URL</h2>
                     <form method="POST" action="/add-url">
+                        <input type="hidden" name="csrf_token" value="{self.csrf_token}">
                         <div class="input-wrapper">
                             <input type="text" name="url" placeholder="Paste URL here..." required>
                             <button type="submit">Add to Podcast</button>
@@ -149,6 +170,7 @@ class PodcastServer:
                 <div class="form-group">
                     <h2>Upload Audio Files</h2>
                     <form id="upload-form" method="POST" action="/upload-audio" enctype="multipart/form-data">
+                        <input type="hidden" name="csrf_token" value="{self.csrf_token}">
                         <div style="margin-bottom: 15px;">
                             <label for="audio" style="display: block; margin-bottom: 5px; font-weight: 500;">Audio Files *</label>
                             <div id="drop-zone" style="width: 100%; padding: 30px 10px; border: 2px dashed #ddd; border-radius: 4px; box-sizing: border-box; background-color: #fafafa; text-align: center; cursor: pointer; transition: all 0.2s ease;">
@@ -253,8 +275,10 @@ class PodcastServer:
 
         @self.app.route("/add-url", methods=["POST"])
         def add_url():
-            """Add a URL to the watch file."""
+            """Queue a URL for download."""
             try:
+                if not self._valid_csrf_token():
+                    return Response("Forbidden", status=403)
                 url = request.form.get("url", "").strip()
 
                 if not url:
@@ -262,16 +286,20 @@ class PodcastServer:
 
                 # Basic URL validation - must be http or https
                 if not url.startswith("http://") and not url.startswith("https://"):
-                    return redirect("/?error=Invalid URL (must start with http:// or https://)")
+                    return redirect(
+                        "/?error=Invalid URL (must start with http:// or https://)"
+                    )
 
-                # Append URL to watch file
-                watch_file = self.config.watch.file
-                with open(watch_file, "a") as f:
-                    f.write(f"{url}\n")
+                if self.submit_urls is None:
+                    raise MessagePublishError("Download queue is unavailable")
 
-                logger.info(f"URL added via web interface: {url}")
+                jobs = self.submit_urls([url])
+                logger.info("Queued download job %s via web interface", jobs[0].job_id)
                 return redirect("/?success=1")
 
+            except MessagePublishError as e:
+                logger.error("Unable to queue URL: %s", e)
+                return redirect("/?error=Download queue is unavailable")
             except Exception as e:
                 logger.error(f"Error adding URL: {e}", exc_info=True)
                 return redirect(f"/?error={str(e)}")
@@ -280,6 +308,8 @@ class PodcastServer:
         def upload_audio():
             """Upload audio files via web form."""
             try:
+                if not self._valid_csrf_token():
+                    return Response("Forbidden", status=403)
                 # Get all uploaded audio files
                 audio_files = request.files.getlist("audio")
                 if not audio_files or all(f.filename == "" for f in audio_files):
@@ -332,7 +362,9 @@ class PodcastServer:
                     file_size = audio_path.stat().st_size
 
                     # Generate URLs
-                    audio_url = f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+                    audio_url = (
+                        f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+                    )
                     pub_date = datetime.now()
 
                     # Create episode
@@ -393,7 +425,7 @@ class PodcastServer:
             produces:
               - application/json
             responses:
-              200:
+              202:
                 description: URL(s) added for processing
                 schema:
                   type: object
@@ -408,6 +440,10 @@ class PodcastServer:
                         type: string
                     count:
                       type: integer
+                    jobs:
+                      type: array
+                      items:
+                        type: object
               400:
                 description: Invalid request
                 schema:
@@ -417,50 +453,98 @@ class PodcastServer:
                       type: boolean
                     error:
                       type: string
-              500:
-                description: Server error
+              503:
+                description: Download queue unavailable
             """
             try:
-                data = request.get_json()
+                data = request.get_json(silent=True)
 
-                if not data:
-                    return jsonify({"success": False, "error": "Request body must be JSON"}), 400
+                if not isinstance(data, dict):
+                    return jsonify(
+                        {
+                            "success": False,
+                            "error": "Request body must be a JSON object",
+                        }
+                    ), 400
 
                 # Support both single "url" and multiple "urls"
                 urls = []
                 if "urls" in data and isinstance(data["urls"], list):
-                    urls = [u.strip() for u in data["urls"] if isinstance(u, str) and u.strip()]
-                elif "url" in data and data["url"]:
+                    urls = [
+                        u.strip()
+                        for u in data["urls"]
+                        if isinstance(u, str) and u.strip()
+                    ]
+                elif isinstance(data.get("url"), str) and data["url"].strip():
                     urls = [data["url"].strip()]
 
                 if not urls:
-                    return jsonify({"success": False, "error": "Missing required field: url or urls"}), 400
+                    return jsonify(
+                        {
+                            "success": False,
+                            "error": "Missing required field: url or urls",
+                        }
+                    ), 400
 
                 # Validate all URLs
-                invalid_urls = [u for u in urls if not u.startswith("http://") and not u.startswith("https://")]
+                invalid_urls = [
+                    u
+                    for u in urls
+                    if not u.startswith("http://") and not u.startswith("https://")
+                ]
                 if invalid_urls:
-                    return jsonify({
+                    return jsonify(
+                        {
+                            "success": False,
+                            "error": f"Invalid URL(s) (must start with http:// or https://): {invalid_urls}",
+                        }
+                    ), 400
+
+                if self.submit_urls is None:
+                    raise MessagePublishError("Download queue is unavailable")
+
+                jobs = self.submit_urls(urls)
+                logger.info("Queued %s download job(s) via API", len(jobs))
+                return jsonify(
+                    {
+                        "success": True,
+                        "message": f"Queued {len(urls)} URL(s) for processing",
+                        "urls": urls,
+                        "count": len(urls),
+                        "jobs": [
+                            {"job_id": job.job_id, "url": job.url} for job in jobs
+                        ],
+                    }
+                ), 202
+
+            except PartialPublishError as e:
+                logger.error(
+                    "Queued %s job(s), but %s job(s) were not accepted",
+                    len(e.accepted_jobs),
+                    len(e.unaccepted_jobs),
+                )
+                return jsonify(
+                    {
                         "success": False,
-                        "error": f"Invalid URL(s) (must start with http:// or https://): {invalid_urls}"
-                    }), 400
-
-                # Append URLs to watch file
-                watch_file = self.config.watch.file
-                with open(watch_file, "a") as f:
-                    for url in urls:
-                        f.write(f"{url}\n")
-
-                logger.info(f"Added {len(urls)} URL(s) via API")
-                return jsonify({
-                    "success": True,
-                    "message": f"Added {len(urls)} URL(s) for processing",
-                    "urls": urls,
-                    "count": len(urls)
-                }), 200
-
+                        "error": "Download queue accepted only part of the batch",
+                        "accepted_jobs": [
+                            {"job_id": job.job_id, "url": job.url}
+                            for job in e.accepted_jobs
+                        ],
+                        "unaccepted_urls": [job.url for job in e.unaccepted_jobs],
+                    }
+                ), 503
+            except MessagePublishError as e:
+                logger.error("Unable to queue URLs: %s", e)
+                return jsonify(
+                    {
+                        "success": False,
+                        "error": "Download queue is unavailable",
+                    }
+                ), 503
             except Exception as e:
                 logger.error(f"Error adding URL via API: {e}", exc_info=True)
-                return jsonify({"success": False, "error": str(e)}), 500
+                return jsonify({"success": False, "error": "Unable to queue URLs"}), 500
 
         @self.app.route("/feed.xml")
         def feed_xml():
@@ -523,7 +607,7 @@ class PodcastServer:
                     return Response(
                         "Episode no longer available",
                         status=410,  # 410 Gone = permanently removed
-                        mimetype="text/plain"
+                        mimetype="text/plain",
                     )
 
                 return send_from_directory(audio_dir, filename)
@@ -563,7 +647,9 @@ class PodcastServer:
                 file_path = os.path.join(thumbnails_dir, filename)
                 if not os.path.exists(file_path):
                     logger.warning(f"Thumbnail not found: {filename}")
-                    return Response("Thumbnail not found", status=404, mimetype="text/plain")
+                    return Response(
+                        "Thumbnail not found", status=404, mimetype="text/plain"
+                    )
 
                 return send_from_directory(thumbnails_dir, filename)
             except Exception as e:
@@ -601,25 +687,38 @@ class PodcastServer:
                 if success:
                     message = '<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin: 15px 0;">✓ Episode deleted successfully</div>'
                 elif error:
-                    message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin: 15px 0;">✗ Error: {error}</div>'
+                    message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin: 15px 0;">✗ Error: {escape(error)}</div>'
 
                 metadata_dir = Path(self.config.storage.metadata_dir)
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
 
                 files = []
                 total_size_bytes = 0
-                for file in sorted(audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
-                    if file.is_file() and file.suffix.lower() in [".mp3", ".m4a", ".wav", ".opus", ".aac", ".ogg", ".flac", ".wma", ".aiff", ".webm"]:
+                for file in sorted(
+                    audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True
+                ):
+                    if file.is_file() and file.suffix.lower() in [
+                        ".mp3",
+                        ".m4a",
+                        ".wav",
+                        ".opus",
+                        ".aac",
+                        ".ogg",
+                        ".flac",
+                        ".wma",
+                        ".aiff",
+                        ".webm",
+                    ]:
                         file_size = file.stat().st_size
                         total_size_bytes += file_size
                         size_mb = file_size / (1024 * 1024)
 
                         # Try to find thumbnail (prefer JPEG first for compatibility)
                         thumbnail_html = ""
-                        for ext in ['.jpg', '.jpeg', '.webp', '.png']:
+                        for ext in [".jpg", ".jpeg", ".webp", ".png"]:
                             thumb_file = thumbnails_dir / f"{file.stem}{ext}"
                             if thumb_file.exists():
-                                thumbnail_html = f'<img src="/thumbnails/{thumb_file.name}" alt="" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px;">'
+                                thumbnail_html = f'<img src="/thumbnails/{quote(thumb_file.name)}" alt="" style="width: 60px; height: 60px; object-fit: cover; border-radius: 4px;">'
                                 break
 
                         # Fallback placeholder if no thumbnail
@@ -637,18 +736,25 @@ class PodcastServer:
                             except Exception:
                                 pass
 
-                        title_html = f'<div style="font-weight: 500;">{episode_title}</div>' if episode_title else ""
+                        title_html = (
+                            f'<div style="font-weight: 500;">{escape(episode_title)}</div>'
+                            if episode_title
+                            else ""
+                        )
+                        audio_path = quote(file.name)
+                        escaped_filename = escape(file.name)
 
                         files.append(
                             f'''<li style="margin: 15px 0; display: flex; align-items: center; gap: 12px;">
                                 {thumbnail_html}
                                 <div style="flex: 1; min-width: 0; overflow: hidden;">
                                     {title_html}
-                                    <a href="/audio/{file.name}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-size: {'12px; color: #888' if episode_title else '14px'};">{file.name}</a>
+                                    <a href="/audio/{audio_path}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-size: {"12px; color: #888" if episode_title else "14px"};">{escaped_filename}</a>
                                 </div>
                                 <span style="color: #666; white-space: nowrap;">({size_mb:.1f} MB)</span>
                                 <form method="POST" action="/delete-episode" style="margin: 0;" onsubmit="return confirm('Delete this episode? This cannot be undone.');">
-                                    <input type="hidden" name="filename" value="{file.name}">
+                                    <input type="hidden" name="csrf_token" value="{self.csrf_token}">
+                                    <input type="hidden" name="filename" value="{escaped_filename}">
                                     <button type="submit" style="background-color: #dc3545; color: white; padding: 5px 12px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px;">Delete</button>
                                 </form>
                             </li>'''
@@ -734,6 +840,7 @@ class PodcastServer:
                     <div class="header-controls">
                         <p style="margin: 0;"><a href="/">&larr; Back</a></p>
                         <form method="POST" action="/delete-all-episodes" style="margin: 0;" onsubmit="return confirm('Delete ALL episodes? This cannot be undone!');">
+                            <input type="hidden" name="csrf_token" value="{self.csrf_token}">
                             <button type="submit" class="delete-all-btn">Delete All Episodes</button>
                         </form>
                     </div>
@@ -753,6 +860,8 @@ class PodcastServer:
         def delete_episode():
             """Delete an episode (audio file and metadata)."""
             try:
+                if not self._valid_csrf_token():
+                    return Response("Forbidden", status=403)
                 filename = request.form.get("filename", "").strip()
 
                 if not filename:
@@ -760,7 +869,11 @@ class PodcastServer:
 
                 # Security: prevent path traversal by ensuring no directory separators
                 # and that the filename is just a basename (no path components)
-                if "/" in filename or "\\" in filename or filename != os.path.basename(filename):
+                if (
+                    "/" in filename
+                    or "\\" in filename
+                    or filename != os.path.basename(filename)
+                ):
                     return redirect("/episodes?error=Invalid filename")
 
                 audio_dir = Path(self.config.storage.audio_dir)
@@ -780,7 +893,7 @@ class PodcastServer:
                     logger.info(f"Deleted metadata file: {metadata_file.name}")
 
                 # Delete corresponding thumbnail (check for common extensions)
-                for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                for ext in [".jpg", ".jpeg", ".png", ".webp"]:
                     thumbnail_file = thumbnails_dir / f"{audio_file.stem}{ext}"
                     if thumbnail_file.exists():
                         thumbnail_file.unlink()
@@ -805,6 +918,8 @@ class PodcastServer:
         def delete_all_episodes():
             """Delete all episodes (audio files, metadata, and thumbnails)."""
             try:
+                if not self._valid_csrf_token():
+                    return Response("Forbidden", status=403)
                 audio_dir = Path(self.config.storage.audio_dir)
                 metadata_dir = Path(self.config.storage.metadata_dir)
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
@@ -814,7 +929,18 @@ class PodcastServer:
                 # Delete all audio files
                 if audio_dir.exists():
                     for audio_file in audio_dir.glob("*"):
-                        if audio_file.is_file() and audio_file.suffix.lower() in [".mp3", ".m4a", ".wav", ".opus", ".aac", ".ogg", ".flac", ".wma", ".aiff", ".webm"]:
+                        if audio_file.is_file() and audio_file.suffix.lower() in [
+                            ".mp3",
+                            ".m4a",
+                            ".wav",
+                            ".opus",
+                            ".aac",
+                            ".ogg",
+                            ".flac",
+                            ".wma",
+                            ".aiff",
+                            ".webm",
+                        ]:
                             audio_file.unlink()
                             logger.info(f"Deleted audio file: {audio_file.name}")
                             deleted_count += 1
@@ -829,9 +955,16 @@ class PodcastServer:
                 # Delete all thumbnail files
                 if thumbnails_dir.exists():
                     for thumbnail_file in thumbnails_dir.glob("*"):
-                        if thumbnail_file.is_file() and thumbnail_file.suffix in [".jpg", ".jpeg", ".png", ".webp"]:
+                        if thumbnail_file.is_file() and thumbnail_file.suffix in [
+                            ".jpg",
+                            ".jpeg",
+                            ".png",
+                            ".webp",
+                        ]:
                             thumbnail_file.unlink()
-                            logger.info(f"Deleted thumbnail file: {thumbnail_file.name}")
+                            logger.info(
+                                f"Deleted thumbnail file: {thumbnail_file.name}"
+                            )
 
                 # Clear all episodes from the feed
                 self.feed.episodes.clear()
@@ -932,15 +1065,21 @@ class PodcastServer:
             try:
                 # Validate required fields
                 if "audio" not in request.files:
-                    return jsonify({"success": False, "error": "Missing required field: audio"}), 400
+                    return jsonify(
+                        {"success": False, "error": "Missing required field: audio"}
+                    ), 400
 
                 audio_file = request.files["audio"]
                 if audio_file.filename == "":
-                    return jsonify({"success": False, "error": "No audio file selected"}), 400
+                    return jsonify(
+                        {"success": False, "error": "No audio file selected"}
+                    ), 400
 
                 title = request.form.get("title", "").strip()
                 if not title:
-                    return jsonify({"success": False, "error": "Missing required field: title"}), 400
+                    return jsonify(
+                        {"success": False, "error": "Missing required field: title"}
+                    ), 400
 
                 # Optional fields
                 description = request.form.get("description", "").strip()
@@ -951,12 +1090,16 @@ class PodcastServer:
                 # Parse pub_date or use current time
                 if pub_date_str:
                     try:
-                        pub_date = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
+                        pub_date = datetime.fromisoformat(
+                            pub_date_str.replace("Z", "+00:00")
+                        )
                         # Convert to naive datetime for consistency with existing code
                         if pub_date.tzinfo is not None:
                             pub_date = pub_date.replace(tzinfo=None)
                     except ValueError as e:
-                        return jsonify({"success": False, "error": f"Invalid pub_date format: {e}"}), 400
+                        return jsonify(
+                            {"success": False, "error": f"Invalid pub_date format: {e}"}
+                        ), 400
                 else:
                     pub_date = datetime.now()
 
@@ -972,20 +1115,30 @@ class PodcastServer:
                                 with open(metadata_file, "r") as f:
                                     data = json.load(f)
                                     # Support both source_url (new) and youtube_url (legacy)
-                                    existing_guid = data.get("source_url") or data.get("youtube_url") or data.get("audio_url")
+                                    existing_guid = (
+                                        data.get("source_url")
+                                        or data.get("youtube_url")
+                                        or data.get("audio_url")
+                                    )
                                     if existing_guid == guid:
-                                        logger.info(f"Episode already exists with GUID: {guid}")
-                                        return jsonify({
-                                            "success": True,
-                                            "message": "Episode already exists",
-                                            "episode": {
-                                                "title": data.get("title"),
-                                                "audio_url": data.get("audio_url"),
-                                                "image_url": data.get("image_url", ""),
-                                                "pub_date": data.get("pub_date"),
-                                                "guid": existing_guid,
+                                        logger.info(
+                                            f"Episode already exists with GUID: {guid}"
+                                        )
+                                        return jsonify(
+                                            {
+                                                "success": True,
+                                                "message": "Episode already exists",
+                                                "episode": {
+                                                    "title": data.get("title"),
+                                                    "audio_url": data.get("audio_url"),
+                                                    "image_url": data.get(
+                                                        "image_url", ""
+                                                    ),
+                                                    "pub_date": data.get("pub_date"),
+                                                    "guid": existing_guid,
+                                                },
                                             }
-                                        }), 409
+                                        ), 409
                             except Exception:
                                 continue
 
@@ -996,7 +1149,11 @@ class PodcastServer:
                     file_ext = ".mp3"  # Default if no extension
 
                 # Use video_id for filename
-                video_id = extract_video_id(source_url) if source_url else extract_video_id(title)
+                video_id = (
+                    extract_video_id(source_url)
+                    if source_url
+                    else extract_video_id(title)
+                )
 
                 # Ensure directories exist
                 audio_dir = Path(self.config.storage.audio_dir)
@@ -1022,7 +1179,9 @@ class PodcastServer:
                 file_size = audio_path.stat().st_size
 
                 # Generate URLs
-                audio_url = f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+                audio_url = (
+                    f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+                )
 
                 # Download and process image if URL provided
                 episode_image_url = ""
@@ -1062,20 +1221,26 @@ class PodcastServer:
 
                 logger.info(f"Created episode via API: {title}")
 
-                return jsonify({
-                    "success": True,
-                    "episode": {
-                        "title": title,
-                        "audio_url": audio_url,
-                        "image_url": episode_image_url,
-                        "pub_date": pub_date.isoformat(),
-                        "guid": final_guid,
+                return jsonify(
+                    {
+                        "success": True,
+                        "episode": {
+                            "title": title,
+                            "audio_url": audio_url,
+                            "image_url": episode_image_url,
+                            "pub_date": pub_date.isoformat(),
+                            "guid": final_guid,
+                        },
                     }
-                }), 201
+                ), 201
 
             except Exception as e:
                 logger.error(f"Error creating episode via API: {e}", exc_info=True)
                 return jsonify({"success": False, "error": str(e)}), 500
+
+    def _valid_csrf_token(self) -> bool:
+        token = request.form.get("csrf_token", "")
+        return bool(token) and secrets.compare_digest(token, self.csrf_token)
 
     def start(self):
         """Start the server in a separate thread."""
@@ -1099,9 +1264,7 @@ class PodcastServer:
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
 
-        logger.info(
-            f"Server started: {self.config.server.base_url}/feed.xml"
-        )
+        logger.info(f"Server started: {self.config.server.base_url}/feed.xml")
 
     def stop(self):
         """Stop the server."""

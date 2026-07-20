@@ -1,49 +1,44 @@
 # Example configuration for podservice
-# Add this to your NixOS or nix-darwin configuration
+# Add this to your NixOS configuration
 
-{ config, pkgs, ... }:
+{ inputs, ... }:
 
 {
-  # Import the service module
+  # Import the NixOS module. It supplies the package by default.
   imports = [
-    /path/to/podservice/nix/service.nix
+    inputs.podservice.nixosModules.default
   ];
-
-  # Or if using flakes:
-  # imports = [
-  #   inputs.podservice.nixosModules.default
-  # ];
 
   services.podservice = {
     enable = true;
-
     # Server configuration
     port = 8083;
     host = "0.0.0.0";
     baseUrl = "http://192.168.50.4:8083"; # Update to your server's IP/domain
 
     # Storage paths
-    dataDir = "/Volumes/Storage/Data/Media/Podservice"; # macOS
-    # dataDir = "/var/lib/podservice"; # Linux
-
-    audioDir = "/Volumes/Storage/Data/Media/Podservice/audio"; # macOS
-    # audioDir = "/var/lib/podservice/audio"; # Linux
+    dataDir = "/var/lib/podservice";
+    audioDir = "/var/lib/podservice/audio";
 
     # Podcast metadata
     podcast = {
       title = "My Podcast";
       description = "Audio podcast episodes";
-      author = "Your Name";
+      author = "PodService";
       language = "en-us";
       category = "Technology";
       # imageUrl = "https://example.com/cover.jpg"; # Optional
     };
 
-    # File watching
-    watch = {
-      enabled = true;
-      file = "/Volumes/Storage/Data/Media/Podservice/urls.txt"; # macOS
-      # file = "/var/lib/podservice/urls.txt"; # Linux
+    rabbitmq = {
+      host = "127.0.0.1";
+      port = 5672;
+      username = "guest";
+      retryDelays = [
+        30
+        300
+        1800
+      ];
     };
 
     # Logging

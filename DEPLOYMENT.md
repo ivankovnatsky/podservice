@@ -1,225 +1,137 @@
 # Deployment Guide
 
-This guide covers deploying podservice on your infrastructure.
+Podservice requires RabbitMQ, ffmpeg, persistent storage, and access to the
+submitted media sources. Keep RabbitMQ on the private network unless its
+authentication and TLS are configured for remote access.
 
-## Network Configuration
+## Flake integration
 
-Based on your setup:
-- **Bee (192.168.50.3)**: Linux NixOS server
-- **Mini (192.168.50.4)**: macOS with nix-darwin
-
-Podservice uses **port 8083** (sequential to podsync's 8082).
-
-## Deployment Options
-
-### Option 1: Using Nix Flake (Recommended)
-
-1. **Add podservice to your flake inputs:**
+Add podservice as an input:
 
 ```nix
-# In your nixos-config/flake.nix
 {
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # ... other inputs
-
-    podservice = {
-      url = "github:ivankovnatsky/podservice";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-  };
-
-  outputs = { self, nixpkgs, podservice, ... }: {
-    # For NixOS (bee)
-    nixosConfigurations.bee = nixpkgs.lib.nixosSystem {
-      # ...
-      modules = [
-        podservice.nixosModules.default
-        ./machines/bee/configuration.nix
-      ];
-    };
-
-    # For nix-darwin (mini)
-    darwinConfigurations.mini = darwin.lib.darwinSystem {
-      # ...
-      modules = [
-        podservice.darwinModules.default
-        ./machines/mini/configuration.nix
-      ];
-    };
+  inputs.podservice = {
+    url = "github:ivankovnatsky/podservice";
+    inputs.nixpkgs.follows = "nixpkgs";
   };
 }
 ```
 
-2. **Configure the service:**
-
-Create `machines/mini/darwin/server/podservice/default.nix`:
+Import the module into a NixOS configuration:
 
 ```nix
-{ config, pkgs, ... }:
+{ inputs, ... }:
 
 {
+  imports = [ inputs.podservice.nixosModules.default ];
+
   services.podservice = {
     enable = true;
     port = 8083;
     host = "0.0.0.0";
     baseUrl = "http://192.168.50.4:8083";
-
-    dataDir = "/Volumes/Storage/Data/podservice";
-    audioDir = "/Volumes/Storage/Data/podservice/audio";
+    dataDir = "/var/lib/podservice";
+    audioDir = "/var/lib/podservice/audio";
 
     podcast = {
       title = "My Podcast";
       description = "Audio podcast episodes";
-      author = "Ivan Kovnatsky";
+      author = "PodService";
       language = "en-us";
       category = "Technology";
     };
 
-    watch = {
-      enabled = true;
-      file = "/Volumes/Storage/Data/podservice/urls.txt";
+    rabbitmq = {
+      host = "127.0.0.1";
+      port = 5672;
+      username = "guest";
+      virtualHost = "/";
+      retryDelays = [ 30 300 1800 ];
     };
-
-    logLevel = "INFO";
   };
 }
 ```
 
-3. **Import in your machine configuration:**
+The module configures podservice itself. RabbitMQ must also be enabled on the
+host or supplied by another machine. When both run under systemd, order
+podservice after `rabbitmq.service` in the machine configuration.
+
+For nix-darwin, import `darwinModules.default` and use macOS storage paths:
 
 ```nix
-# machines/mini/darwin/configuration.nix
+{ inputs, ... }:
+
 {
-  imports = [
-    ./server/podservice
-    # ... other imports
-  ];
+  imports = [ inputs.podservice.darwinModules.default ];
+
+  services.podservice = {
+    enable = true;
+    dataDir = "/Volumes/Storage/Data/.podservice";
+    audioDir = "/Volumes/Storage/Data/.podservice/audio";
+    rabbitmq.host = "127.0.0.1";
+  };
 }
 ```
 
-### Option 2: Local Development Path
-
-If not using a flake input, you can import directly:
-
-```nix
-{
-  imports = [
-    /Users/ivan/Sources/github.com/ivankovnatsky/podservice/nix/service.nix
-  ];
-}
-```
+The launchd daemon creates its storage directories before starting and writes
+stdout and stderr logs below `dataDir`. A complete configuration is available in
+[`nix/example-darwin-config.nix`](nix/example-darwin-config.nix).
 
 ## Usage
 
-### Adding URLs
-
-Simply add URLs (YouTube, Substack, or any yt-dlp supported source) to the watched file, one per line:
+Submit a URL through the web interface or API:
 
 ```bash
-# macOS
-echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /Volumes/Storage/Data/Media/Podservice/urls.txt
-# Or Substack articles with audio
-echo "https://snyder.substack.com/p/article-title" >> /Volumes/Storage/Data/Media/Podservice/urls.txt
-
-# Linux
-echo "https://www.youtube.com/watch?v=VIDEO_ID" >> /var/lib/podservice/urls.txt
+curl -X POST http://192.168.50.4:8083/api/urls \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/episode"}'
 ```
 
-The service will:
-1. Detect the file change
-2. Download the media as MP3
-3. Add it to the podcast feed
-4. Remove the URL from the file after successful processing
+The service returns `202 Accepted` after the message is confirmed by RabbitMQ.
+The consumer downloads jobs one at a time, retries failures using delayed
+queues, and moves exhausted jobs to `podservice.downloads.dead`.
 
-### Accessing the Podcast
+Endpoints:
 
-- **Feed URL**: `http://192.168.50.4:8083/feed.xml`
-- **Web Interface**: `http://192.168.50.4:8083/`
-- **Audio Files**: `http://192.168.50.4:8083/audio`
+- Feed: `http://192.168.50.4:8083/feed.xml`
+- Web interface: `http://192.168.50.4:8083/`
+- Audio: `http://192.168.50.4:8083/audio`
+- API documentation: `http://192.168.50.4:8083/apidocs/`
 
-### Adding to Apple Podcasts
-
-1. Open Apple Podcasts
-2. File → Add a Show by URL
-3. Enter: `http://192.168.50.4:8083/feed.xml`
-
-## Service Management
-
-### NixOS (bee)
+## Service management
 
 ```bash
-# Check status
-sudo systemctl status podservice
-
-# View logs
-sudo journalctl -u podservice -f
-
-# Restart service
-sudo systemctl restart podservice
+systemctl status podservice rabbitmq
+journalctl -u podservice -u rabbitmq -f
 ```
 
-### nix-darwin (mini)
+On nix-darwin:
 
 ```bash
-# Check status
-sudo launchctl list | grep podservice
-
-# View logs
-tail -f /Volumes/Storage/Data/podservice/podservice.out.log
-
-# Restart service
-sudo launchctl kickstart -k system/podservice
+sudo launchctl print system/org.nixos.podservice
+tail -f /Volumes/Storage/Data/.podservice/podservice.out.log
 ```
 
-## Directory Structure
+## Persistent data
 
+```text
+/var/lib/podservice/
+├── audio/       # Downloaded audio
+├── metadata/    # Episode metadata
+└── thumbnails/  # Episode artwork
 ```
-/Volumes/Storage/Data/Media/Podservice/  # or /var/lib/podservice/
-├── audio/                               # Downloaded MP3 files
-│   └── *.mp3
-├── metadata/                            # Episode metadata JSON files
-│   └── *.json
-├── urls.txt                             # URL queue (watched file)
-└── podservice.*.log                     # Service logs (macOS)
-```
+
+RabbitMQ stores queued jobs separately in its own data directory. Include both
+the podservice and RabbitMQ data in the host's backup policy.
+
+On Darwin, the equivalent podservice layout is rooted at
+`/Volumes/Storage/Data/.podservice`.
 
 ## Troubleshooting
 
-### Check if service is running
-
-```bash
-# Test the endpoint
-curl http://192.168.50.4:8083/feed.xml
-
-# Check if port is listening
-netstat -an | grep 8083
-```
-
-### Manually process a URL
-
-```bash
-# Enter the nix shell
-nix develop /Users/ivan/Sources/github.com/ivankovnatsky/podservice
-
-# Run directly
-python -m podservice info
-```
-
-### View detailed logs
-
-Set `logLevel = "DEBUG"` in the service configuration and rebuild.
-
-## Security Considerations
-
-- The service runs as a dedicated user/group (`podservice`)
-- Protected system directories (on NixOS)
-- Consider adding authentication if exposed publicly
-- Currently HTTP only - use reverse proxy (nginx/caddy) for HTTPS
-
-## Next Steps
-
-1. Configure reverse proxy with HTTPS
-2. Add custom podcast artwork
-3. Set up automated backups of audio files
-4. Monitor disk usage in audio directory
+- A `503` response from `/api/urls` means RabbitMQ did not confirm the job.
+- Check the podservice logs for consumer reconnects and download errors.
+- Inspect `podservice.downloads.dead` for jobs that exhausted all retries.
+- Verify the configured base URL is reachable from the podcast player.
+- Use a reverse proxy for HTTPS and add authentication before exposing the
+  service outside a trusted network.

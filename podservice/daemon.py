@@ -8,9 +8,10 @@ from pathlib import Path
 
 from .config import ServiceConfig, load_config
 from .downloader import MediaDownloader
+from .episodes import EpisodeService
 from .feed import PodcastFeed
+from .messaging import RabbitMQConsumer, RabbitMQPublisher
 from .server import PodcastServer
-from .watcher import URLFileWatcher, read_urls_from_file, remove_url_from_file
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,6 @@ class PodService:
         # Create metadata directory
         self.metadata_dir = Path(self.config.storage.metadata_dir)
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
-
-        # Ensure watch file exists
-        if self.config.watch.enabled:
-            watch_file = Path(self.config.watch.file)
-            watch_file.parent.mkdir(parents=True, exist_ok=True)
-            watch_file.touch(exist_ok=True)
 
         # Initialize components
         self.feed = PodcastFeed(
@@ -62,16 +57,17 @@ class PodService:
             thumbnails_dir=self.config.storage.thumbnails_dir,
         )
 
-        # Initialize server
-        self.server = PodcastServer(self.config, self.feed)
-
-        # Initialize file watcher
-        self.watcher = None
-        if self.config.watch.enabled:
-            self.watcher = URLFileWatcher(
-                file_path=self.config.watch.file,
-                callback=self._process_url_file,
-            )
+        self.episode_service = EpisodeService(self.downloader, self.feed)
+        self.publisher = RabbitMQPublisher(self.config.rabbitmq)
+        self.consumer = RabbitMQConsumer(
+            self.config.rabbitmq,
+            self.episode_service.process_download,
+        )
+        self.server = PodcastServer(
+            self.config,
+            self.feed,
+            submit_urls=self.publisher.publish_urls,
+        )
 
         # Set up signal handlers
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -82,73 +78,29 @@ class PodService:
         logger.info(f"Received signal {signum}, shutting down...")
         self.stop()
 
-    def _process_url_file(self, file_path: str):
-        """Process URLs from the watched file."""
-        logger.info(f"Processing URL file: {file_path}")
-
-        urls = read_urls_from_file(file_path)
-
-        if not urls:
-            logger.debug("No URLs to process")
-            return
-
-        logger.info(f"Found {len(urls)} URL(s) to process")
-
-        for url in urls:
-            try:
-                logger.info(f"Processing URL: {url}")
-
-                # Download media as audio
-                episode = self.downloader.download(url)
-
-                if episode:
-                    # Add to feed
-                    self.feed.add_episode(episode)
-                    logger.info(f"Added episode to feed: {episode.title}")
-
-                    # Remove URL from file after successful processing
-                    remove_url_from_file(file_path, url)
-                    logger.info(f"Removed processed URL from file: {url}")
-                else:
-                    logger.error(f"Failed to download: {url}")
-
-            except Exception as e:
-                logger.error(f"Error processing URL {url}: {e}", exc_info=True)
-
-        logger.info("Finished processing URLs")
-
     def start(self):
         """Start the service daemon."""
         logger.info("Starting Pod Service...")
-        logger.info(f"Configuration:")
+        logger.info("Configuration:")
         logger.info(f"  Server: {self.config.server.base_url}")
         logger.info(f"  Port: {self.config.server.port}")
         logger.info(f"  Audio directory: {self.config.storage.audio_dir}")
-        logger.info(f"  Watch file: {self.config.watch.file}")
+        logger.info(
+            "  RabbitMQ: %s:%s/%s",
+            self.config.rabbitmq.host,
+            self.config.rabbitmq.port,
+            self.config.rabbitmq.queue,
+        )
         logger.info(f"  Podcast: {self.config.podcast.title}")
 
         self.running = True
 
         try:
-            # Start HTTP server
+            self.consumer.start()
             self.server.start()
-
-            # Start file watcher
-            if self.watcher:
-                self.watcher.start()
-
-                # Process existing URLs once at startup
-                self._process_url_file(self.config.watch.file)
-
-                # Main loop - just keep the service alive
-                logger.info("Service running. Watching for URL changes...")
-                while self.running:
-                    time.sleep(1)
-            else:
-                logger.info("File watching disabled. Server running in standalone mode.")
-                logger.info(f"Add episodes by placing URLs in {self.config.watch.file}")
-                while self.running:
-                    time.sleep(1)
+            logger.info("Service running")
+            while self.running:
+                time.sleep(1)
 
         except KeyboardInterrupt:
             logger.info("Service interrupted by user")
@@ -165,9 +117,8 @@ class PodService:
         """Cleanup resources."""
         logger.info("Cleaning up...")
 
-        if self.watcher:
-            self.watcher.stop()
-
+        self.consumer.stop()
+        self.publisher.close()
         self.server.stop()
 
         logger.info("Pod Service stopped")

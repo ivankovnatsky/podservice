@@ -1,0 +1,21 @@
+[global]
+excludes = [".stfolder/**", "data/**", "result"]
+
+[formatter.ruff]
+command = "ruff"
+options = ["format"]
+includes = ["*.py"]
+
+[formatter.ruff-check]
+command = "ruff"
+options = ["check", "--fix"]
+includes = ["*.py"]
+
+[formatter.nix]
+command = "nixfmt"
+includes = ["*.nix"]
+
+[formatter.prettier]
+command = "prettier"
+options = ["--write", "--prose-wrap", "always"]
+includes = ["*.md"]

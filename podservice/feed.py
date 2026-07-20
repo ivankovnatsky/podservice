@@ -5,7 +5,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import List
 from urllib.parse import quote, unquote
 from xml.etree import ElementTree as ET
 
@@ -162,7 +162,9 @@ class PodcastFeed:
             f.write(xml_content)
         logger.info(f"Saved feed to {file_path}")
 
-    def load_episodes_from_metadata(self, metadata_dir: str, audio_dir: str = "", thumbnails_dir: str = ""):
+    def load_episodes_from_metadata(
+        self, metadata_dir: str, audio_dir: str = "", thumbnails_dir: str = ""
+    ):
         """Load episodes from metadata files in directory.
 
         Also migrates legacy title-based filenames to video_id-based filenames.
@@ -208,20 +210,30 @@ class PodcastFeed:
                 if video_id and audio_dir:
                     audio_path = Path(audio_file)
                     if audio_path.stem != video_id:
-                        new_audio_path = Path(audio_dir) / f"{video_id}{audio_path.suffix}"
+                        new_audio_path = (
+                            Path(audio_dir) / f"{video_id}{audio_path.suffix}"
+                        )
                         if not new_audio_path.exists():
                             audio_path.rename(new_audio_path)
-                            logger.info(f"Migrated audio: {audio_path.name} -> {new_audio_path.name}")
+                            logger.info(
+                                f"Migrated audio: {audio_path.name} -> {new_audio_path.name}"
+                            )
                             audio_file = str(new_audio_path)
 
                             # Rename thumbnail
                             if thumbnails_dir:
-                                for ext in ['.jpg', '.jpeg', '.png', '.webp']:
-                                    old_thumb = Path(thumbnails_dir) / f"{audio_path.stem}{ext}"
+                                for ext in [".jpg", ".jpeg", ".png", ".webp"]:
+                                    old_thumb = (
+                                        Path(thumbnails_dir) / f"{audio_path.stem}{ext}"
+                                    )
                                     if old_thumb.exists():
-                                        new_thumb = Path(thumbnails_dir) / f"{video_id}{ext}"
+                                        new_thumb = (
+                                            Path(thumbnails_dir) / f"{video_id}{ext}"
+                                        )
                                         old_thumb.rename(new_thumb)
-                                        logger.info(f"Migrated thumbnail: {old_thumb.name} -> {new_thumb.name}")
+                                        logger.info(
+                                            f"Migrated thumbnail: {old_thumb.name} -> {new_thumb.name}"
+                                        )
                                         break
 
                             # Rename metadata file
@@ -232,7 +244,9 @@ class PodcastFeed:
                                 with open(json_file, "w") as f:
                                     json.dump(data, f, indent=2)
                                 json_file.rename(new_json)
-                                logger.info(f"Migrated metadata: {json_file.name} -> {new_json.name}")
+                                logger.info(
+                                    f"Migrated metadata: {json_file.name} -> {new_json.name}"
+                                )
 
                             migrated += 1
                         else:
@@ -253,16 +267,20 @@ class PodcastFeed:
                 if thumbnails_dir:
                     # Look for thumbnail by audio file stem
                     audio_stem = Path(audio_file).stem
-                    for ext in ['.jpg', '.jpeg', '.png', '.webp']:
+                    for ext in [".jpg", ".jpeg", ".png", ".webp"]:
                         thumb_path = Path(thumbnails_dir) / f"{audio_stem}{ext}"
                         if thumb_path.exists():
-                            image_url = f"{self.base_url}/thumbnails/{quote(thumb_path.name)}"
+                            image_url = (
+                                f"{self.base_url}/thumbnails/{quote(thumb_path.name)}"
+                            )
                             break
                 else:
                     stored_image_url = data.get("image_url", "")
                     if stored_image_url:
-                        image_filename = unquote(stored_image_url.split('/')[-1])
-                        image_url = f"{self.base_url}/thumbnails/{quote(image_filename)}"
+                        image_filename = unquote(stored_image_url.split("/")[-1])
+                        image_url = (
+                            f"{self.base_url}/thumbnails/{quote(image_filename)}"
+                        )
 
                 # Create episode from metadata
                 episode = Episode(

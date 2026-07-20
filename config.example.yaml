@@ -15,7 +15,7 @@ podcast:
   # Podcast metadata
   title: "My Podcast"
   description: "Audio podcast episodes"
-  author: "Ivan Kovnatsky"
+  author: "PodService"
   language: "en-us"
   category: "Technology"
 
@@ -35,13 +35,20 @@ storage:
   # Thumbnails directory (defaults to data_dir/thumbnails if not set)
   # thumbnails_dir: "./data/thumbnails"
 
-watch:
-  # Enable file watching
-  enabled: true
+rabbitmq:
+  # RabbitMQ connection and durable download-job routing
+  host: "127.0.0.1"
+  port: 5672
+  username: "guest"
+  password_file: null
+  virtual_host: "/"
+  exchange: "podservice.commands"
+  queue: "podservice.downloads"
+  routing_key: "download.requested"
 
-  # File to watch for URLs (YouTube, Substack, or any yt-dlp supported source)
-  # Add one URL per line. Lines starting with # are ignored.
-  file: "./data/urls.txt"
+  # Delay failed downloads for 30 seconds, 5 minutes, then 30 minutes
+  retry_delays: [30, 300, 1800]
+  reconnect_delay: 5
 
 # Logging level: DEBUG, INFO, WARNING, ERROR
 log_level: "INFO"

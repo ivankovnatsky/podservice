@@ -1,4 +1,10 @@
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  options,
+  pkgs,
+  ...
+}:
 
 with lib;
 
@@ -6,47 +12,66 @@ let
   cfg = config.services.podservice;
 
   # Build the config file
-  configFile = pkgs.writeText "podservice-config.yaml" (builtins.toJSON {
-    server = {
-      port = cfg.port;
-      host = cfg.host;
-      base_url = cfg.baseUrl;
-    };
-    podcast = {
-      title = cfg.podcast.title;
-      description = cfg.podcast.description;
-      author = cfg.podcast.author;
-      language = cfg.podcast.language;
-      category = cfg.podcast.category;
-      image_url = cfg.podcast.imageUrl;
-    };
-    storage = {
-      data_dir = cfg.dataDir;
-      audio_dir = cfg.audioDir;
-    };
-    watch = {
-      enabled = cfg.watch.enabled;
-      file = cfg.watch.file;
-    };
-    log_level = cfg.logLevel;
-  });
+  configFile = pkgs.writeText "podservice-config.yaml" (
+    builtins.toJSON {
+      server = {
+        port = cfg.port;
+        host = cfg.host;
+        base_url = cfg.baseUrl;
+      };
+      podcast = {
+        title = cfg.podcast.title;
+        description = cfg.podcast.description;
+        author = cfg.podcast.author;
+        language = cfg.podcast.language;
+        category = cfg.podcast.category;
+        image_url = cfg.podcast.imageUrl;
+      };
+      storage = {
+        data_dir = cfg.dataDir;
+        audio_dir = cfg.audioDir;
+      };
+      rabbitmq = {
+        host = cfg.rabbitmq.host;
+        port = cfg.rabbitmq.port;
+        username = cfg.rabbitmq.username;
+        password_file = cfg.rabbitmq.passwordFile;
+        virtual_host = cfg.rabbitmq.virtualHost;
+        exchange = cfg.rabbitmq.exchange;
+        queue = cfg.rabbitmq.queue;
+        routing_key = cfg.rabbitmq.routingKey;
+        retry_delays = cfg.rabbitmq.retryDelays;
+        reconnect_delay = cfg.rabbitmq.reconnectDelay;
+      };
+      log_level = cfg.logLevel;
+    }
+  );
 
-  # Python environment with podservice
-  pythonEnv = pkgs.python312.withPackages (ps: with ps; [
-    flask
-    flasgger
-    watchdog
-    yt-dlp
-    pyyaml
-    requests
-    click
-    pillow
-  ]);
+  darwinStart = pkgs.writeShellScript "podservice-start" ''
+    ${pkgs.coreutils}/bin/mkdir -p ${
+      lib.escapeShellArgs [
+        cfg.dataDir
+        cfg.audioDir
+        "${cfg.dataDir}/metadata"
+        "${cfg.dataDir}/thumbnails"
+      ]
+    }
+    export PATH=${lib.makeBinPath [ pkgs.ffmpeg ]}
+    cd ${lib.escapeShellArg cfg.dataDir}
+    exec ${cfg.package}/bin/podservice serve --config ${configFile} \
+      >> ${lib.escapeShellArg "${cfg.dataDir}/podservice.out.log"} \
+      2>> ${lib.escapeShellArg "${cfg.dataDir}/podservice.error.log"}
+  '';
 
 in
 {
   options.services.podservice = {
     enable = mkEnableOption "Pod Service - Podcast Feed Service";
+
+    package = mkOption {
+      type = types.package;
+      description = "Podservice package to run";
+    };
 
     port = mkOption {
       type = types.int;
@@ -93,7 +118,7 @@ in
 
       author = mkOption {
         type = types.str;
-        default = "Pod Service";
+        default = "PodService";
         description = "Podcast author";
       };
 
@@ -116,17 +141,69 @@ in
       };
     };
 
-    watch = {
-      enabled = mkOption {
-        type = types.bool;
-        default = true;
-        description = "Enable file watching";
+    rabbitmq = {
+      host = mkOption {
+        type = types.str;
+        default = "127.0.0.1";
+        description = "RabbitMQ host";
       };
 
-      file = mkOption {
+      port = mkOption {
+        type = types.port;
+        default = 5672;
+        description = "RabbitMQ AMQP port";
+      };
+
+      username = mkOption {
         type = types.str;
-        default = "/var/lib/podservice/urls.txt";
-        description = "File to watch for URLs";
+        default = "guest";
+        description = "RabbitMQ username";
+      };
+
+      passwordFile = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Runtime path to the RabbitMQ password file";
+      };
+
+      virtualHost = mkOption {
+        type = types.str;
+        default = "/";
+        description = "RabbitMQ virtual host";
+      };
+
+      exchange = mkOption {
+        type = types.str;
+        default = "podservice.commands";
+        description = "Download command exchange";
+      };
+
+      queue = mkOption {
+        type = types.str;
+        default = "podservice.downloads";
+        description = "Download job queue";
+      };
+
+      routingKey = mkOption {
+        type = types.str;
+        default = "download.requested";
+        description = "Download command routing key";
+      };
+
+      retryDelays = mkOption {
+        type = types.listOf types.ints.positive;
+        default = [
+          30
+          300
+          1800
+        ];
+        description = "Retry delays in seconds";
+      };
+
+      reconnectDelay = mkOption {
+        type = types.ints.positive;
+        default = 5;
+        description = "Consumer reconnect delay in seconds";
       };
     };
 
@@ -149,74 +226,67 @@ in
     };
   };
 
-  config = mkIf cfg.enable {
-    # Create user and group
-    users.users.${cfg.user} = {
-      isSystemUser = true;
-      group = cfg.group;
-      home = cfg.dataDir;
-      createHome = true;
-      description = "Pod Service user";
-    };
+  config = mkIf cfg.enable (mkMerge [
+    {
+      assertions = [
+        {
+          assertion = cfg.rabbitmq.username == "guest" || cfg.rabbitmq.passwordFile != null;
+          message = "services.podservice.rabbitmq.passwordFile is required for non-guest users";
+        }
+      ];
+    }
 
-    users.groups.${cfg.group} = { };
-
-    # Systemd service (for NixOS)
-    systemd.services.podservice = mkIf pkgs.stdenv.isLinux {
-      description = "Pod Service - Podcast Feed Service";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ];
-
-      serviceConfig = {
-        Type = "simple";
-        User = cfg.user;
-        Group = cfg.group;
-        WorkingDirectory = cfg.dataDir;
-        ExecStart = "${pythonEnv}/bin/python -m podservice serve --config ${configFile}";
-        Restart = "on-failure";
-        RestartSec = "10s";
-
-        # Security hardening
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        ReadWritePaths = [ cfg.dataDir cfg.audioDir ];
+    (optionalAttrs (options ? systemd) {
+      users.users.${cfg.user} = {
+        isSystemUser = true;
+        group = cfg.group;
+        home = cfg.dataDir;
+        createHome = true;
+        description = "Pod Service user";
       };
 
-      preStart = ''
-        # Ensure directories exist
-        mkdir -p ${cfg.dataDir}
-        mkdir -p ${cfg.audioDir}
-        mkdir -p ${cfg.dataDir}/metadata
+      users.groups.${cfg.group} = { };
 
-        # Create watch file if it doesn't exist
-        if [ ! -f ${cfg.watch.file} ]; then
-          touch ${cfg.watch.file}
-        fi
+      systemd.tmpfiles.rules = [
+        "d ${cfg.dataDir} 0750 ${cfg.user} ${cfg.group} -"
+        "d ${cfg.audioDir} 0750 ${cfg.user} ${cfg.group} -"
+        "d ${cfg.dataDir}/metadata 0750 ${cfg.user} ${cfg.group} -"
+      ];
 
-        # Set permissions
-        chown -R ${cfg.user}:${cfg.group} ${cfg.dataDir}
-      '';
-    };
+      systemd.services.podservice = {
+        description = "Pod Service - Podcast Feed Service";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network.target" ];
+        path = [ pkgs.ffmpeg ];
 
-    # Launchd service (for macOS/nix-darwin)
-    launchd.daemons.podservice = mkIf pkgs.stdenv.isDarwin {
-      serviceConfig = {
-        ProgramArguments = [
-          "${pythonEnv}/bin/python"
-          "-m"
-          "podservice"
-          "serve"
-          "--config"
-          "${configFile}"
-        ];
+        serviceConfig = {
+          Type = "simple";
+          User = cfg.user;
+          Group = cfg.group;
+          WorkingDirectory = cfg.dataDir;
+          ExecStart = "${cfg.package}/bin/podservice serve --config ${configFile}";
+          Restart = "on-failure";
+          RestartSec = "10s";
+          TimeoutStopSec = "infinity";
+
+          NoNewPrivileges = true;
+          PrivateTmp = true;
+          ProtectSystem = "strict";
+          ProtectHome = true;
+          ReadWritePaths = [
+            cfg.dataDir
+            cfg.audioDir
+          ];
+        };
+      };
+    })
+
+    (optionalAttrs (options ? launchd) {
+      launchd.daemons.podservice.serviceConfig = {
+        ProgramArguments = [ (toString darwinStart) ];
         KeepAlive = true;
         RunAtLoad = true;
-        StandardErrorPath = "${cfg.dataDir}/podservice.error.log";
-        StandardOutPath = "${cfg.dataDir}/podservice.out.log";
-        WorkingDirectory = cfg.dataDir;
       };
-    };
-  };
+    })
+  ]);
 }

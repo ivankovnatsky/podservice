@@ -24,7 +24,7 @@ class PodcastConfig:
 
     title: str = "My Podcast"
     description: str = "Audio podcast episodes"
-    author: str = "Pod Service"
+    author: str = "PodService"
     language: str = "en-us"
     category: str = "Technology"
     image_url: Optional[str] = None
@@ -57,19 +57,38 @@ class StorageConfig:
         if self.thumbnails_dir is None:
             self.thumbnails_dir = os.path.join(self.data_dir, "thumbnails")
         else:
-            self.thumbnails_dir = os.path.abspath(os.path.expanduser(self.thumbnails_dir))
+            self.thumbnails_dir = os.path.abspath(
+                os.path.expanduser(self.thumbnails_dir)
+            )
 
 
 @dataclass
-class WatchConfig:
-    """File watching configuration."""
+class RabbitMQConfig:
+    """RabbitMQ connection and queue configuration."""
 
-    file: str = "/tmp/podservice/urls.txt"
-    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 5672
+    username: str = "guest"
+    password_file: Optional[str] = None
+    virtual_host: str = "/"
+    exchange: str = "podservice.commands"
+    queue: str = "podservice.downloads"
+    routing_key: str = "download.requested"
+    retry_delays: tuple[int, ...] = (30, 300, 1800)
+    reconnect_delay: int = 5
 
     def __post_init__(self):
-        """Resolve to absolute path."""
-        self.file = os.path.abspath(os.path.expanduser(self.file))
+        self.retry_delays = tuple(self.retry_delays)
+        if not self.retry_delays or any(delay <= 0 for delay in self.retry_delays):
+            raise ValueError("rabbitmq.retry_delays must contain positive values")
+        if self.reconnect_delay <= 0:
+            raise ValueError("rabbitmq.reconnect_delay must be positive")
+        if self.username != "guest" and self.password_file is None:
+            raise ValueError("rabbitmq.password_file is required for non-guest users")
+        if self.password_file is not None:
+            self.password_file = os.path.abspath(
+                os.path.expandvars(os.path.expanduser(self.password_file))
+            )
 
 
 @dataclass
@@ -79,7 +98,7 @@ class ServiceConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     podcast: PodcastConfig = field(default_factory=PodcastConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
-    watch: WatchConfig = field(default_factory=WatchConfig)
+    rabbitmq: RabbitMQConfig = field(default_factory=RabbitMQConfig)
     log_level: str = "INFO"
 
 
@@ -122,16 +141,19 @@ def load_config(config_path: Optional[str] = None) -> ServiceConfig:
         storage_data = data.get("storage", {})
         storage = StorageConfig(**storage_data)
 
-        # Parse watch config
-        watch_data = data.get("watch", {})
-        watch = WatchConfig(**watch_data)
+        rabbitmq_data = data.get("rabbitmq", {})
+        if "password" in rabbitmq_data:
+            raise ValueError(
+                "rabbitmq.password is not supported; use rabbitmq.password_file"
+            )
+        rabbitmq = RabbitMQConfig(**rabbitmq_data)
 
         # Create main config
         config = ServiceConfig(
             server=server,
             podcast=podcast,
             storage=storage,
-            watch=watch,
+            rabbitmq=rabbitmq,
             log_level=data.get("log_level", "INFO"),
         )
 
@@ -172,9 +194,17 @@ def save_config(config: ServiceConfig, config_path: Optional[str] = None) -> Non
             "metadata_dir": config.storage.metadata_dir,
             "thumbnails_dir": config.storage.thumbnails_dir,
         },
-        "watch": {
-            "file": config.watch.file,
-            "enabled": config.watch.enabled,
+        "rabbitmq": {
+            "host": config.rabbitmq.host,
+            "port": config.rabbitmq.port,
+            "username": config.rabbitmq.username,
+            "password_file": config.rabbitmq.password_file,
+            "virtual_host": config.rabbitmq.virtual_host,
+            "exchange": config.rabbitmq.exchange,
+            "queue": config.rabbitmq.queue,
+            "routing_key": config.rabbitmq.routing_key,
+            "retry_delays": list(config.rabbitmq.retry_delays),
+            "reconnect_delay": config.rabbitmq.reconnect_delay,
         },
         "log_level": config.log_level,
     }

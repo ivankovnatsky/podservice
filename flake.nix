@@ -25,7 +25,7 @@
             # Core Dependencies
             flask
             flasgger
-            watchdog
+            pika
             yt-dlp
             pyyaml
             requests
@@ -73,6 +73,7 @@
             # Formatting tools
             treefmt
             nixfmt-rfc-style
+            prettier
             ruff
           ];
 
@@ -89,5 +90,24 @@
           '';
         };
       }
-    );
+    )
+    // {
+      nixosModules.default =
+        { lib, pkgs, ... }:
+        {
+          imports = [ ./nix/service.nix ];
+          services.podservice.package =
+            lib.mkDefault
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        };
+
+      darwinModules.default =
+        { lib, pkgs, ... }:
+        {
+          imports = [ ./nix/service.nix ];
+          services.podservice.package =
+            lib.mkDefault
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        };
+    };
 }

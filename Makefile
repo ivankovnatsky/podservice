@@ -6,7 +6,7 @@ dev:
 serve:
 	@echo "Starting Pod Service..."
 	@echo "Feed URL: http://localhost:8083/feed.xml"
-	@echo "Add URLs to: ./data/urls.txt"
+	@echo "Submit URLs at: http://localhost:8083"
 	@nix develop --command python -m podservice serve --config config.example.yaml
 
 .PHONY: info
@@ -34,8 +34,7 @@ test:
 
 .PHONY: format
 format:
-	@nix develop --command ruff check --fix .
-	@nix develop --command ruff format .
+	@nix develop --command treefmt
 
 .PHONY: update
 update:

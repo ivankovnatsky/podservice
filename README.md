@@ -1,169 +1,192 @@
 # Pod Service
 
-Podcast Feed Service - Convert media URLs to podcast episodes.
-
-A lightweight Python service that watches a file for URLs (YouTube, Substack,
-or any yt-dlp supported source), downloads them as audio, and serves them as
-a podcast feed compatible with Apple Podcasts and other podcast players.
+Podservice turns media URLs supported by yt-dlp into audio episodes and serves
+them through a podcast feed compatible with Apple Podcasts and other players.
 
 ## Features
 
-- 🎙️ **HTTP server** serving a podcast RSS feed with iTunes extensions
-- 👀 **File watching** for automatic URL processing
-- 📥 **Automatic download** using yt-dlp (YouTube, Substack, and many other sources)
-- 🔄 **Real-time updates** - new episodes appear immediately
-- 📱 **Apple Podcast compatible** feed
-- 🚀 **NixOS/nix-darwin** service module for easy deployment
-- 🔒 **Lightweight** - simple Python service with minimal dependencies
+- Flask web interface and REST API
+- Durable RabbitMQ-backed download jobs with confirmed publishing
+- Delayed retries and a dead-letter queue for failed downloads
+- Audio extraction through yt-dlp and ffmpeg
+- RSS 2.0 feed with iTunes extensions
+- Direct audio upload and episode management
+- Swagger API documentation at `/apidocs/`
+- Nix package plus NixOS and nix-darwin service modules
 
-## Installation
+## Requirements
 
-```bash
-# Clone the repo
-git clone https://github.com/ivankovnatsky/podservice
-cd podservice
+- Python 3.9 or newer
+- RabbitMQ
+- ffmpeg
+- yt-dlp
 
-# Using Nix (recommended)
-make dev
+## Quick start
 
-# Or with poetry
-poetry install
-```
-
-## Quick Start (Local Development)
-
-The fastest way to try it out:
+Start RabbitMQ, then run the service from its Nix development environment:
 
 ```bash
-# Start the service (automatically creates ./data directory)
 make serve
 ```
 
-**Add URLs:**
+Open <http://localhost:8083>, submit a media URL, and subscribe to
+<http://localhost:8083/feed.xml>.
 
-Option 1 - Web interface (easiest):
-- Open http://localhost:8083 in your browser
-- Paste any URL and click "Add to Podcast"
+## API
 
-Option 2 - Command line:
-```bash
-echo "https://www.youtube.com/watch?v=dQw4w9WgXcQ" >> data/urls.txt
-# Or Substack articles with audio
-echo "https://snyder.substack.com/p/how-wars-are-won" >> data/urls.txt
-```
-
-**View feed:**
-- Feed XML: http://localhost:8083/feed.xml
-- Audio files: http://localhost:8083/audio
-
-The service automatically downloads videos as audio and updates the feed in real-time.
-
-## Production Setup
-
-1. **Initialize configuration:**
-   ```bash
-   podservice init
-   ```
-
-2. **Edit the config file:**
-   - macOS: `~/Library/Application Support/podservice/config.yaml`
-   - Linux: `~/.config/podservice/config.yaml`
-
-3. **Start the service:**
-   ```bash
-   podservice serve
-   ```
-
-4. **Subscribe in Apple Podcasts:**
-   - File → Add a Show by URL
-   - Enter: `http://your-server:8083/feed.xml`
-
-## Development Commands
+Queue one URL:
 
 ```bash
-# Quick commands (using Makefile)
-make serve         # Start dev service
-make clean         # Clean temp files
-make info          # Show config
-make test          # Run tests
-make help          # Show all commands
-
-# Or use CLI directly
-podservice serve  # Start service
-podservice init   # Initialize config
-podservice info   # Show info
-
-# With tmuxinator (full dev environment)
-tmuxinator start podservice
+curl -X POST http://localhost:8083/api/urls \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/episode"}'
 ```
+
+Queue several URLs:
+
+```bash
+curl -X POST http://localhost:8083/api/urls \
+  -H 'Content-Type: application/json' \
+  -d '{"urls":["https://example.com/one","https://example.com/two"]}'
+```
+
+The endpoint returns `202 Accepted` after RabbitMQ confirms the persistent
+messages. Each accepted URL receives a job ID.
+
+Upload an existing audio file:
+
+```bash
+curl -X POST http://localhost:8083/api/episodes \
+  -F 'audio=@episode.mp3' \
+  -F 'title=My Episode' \
+  -F 'description=Episode description' \
+  -F 'source_url=https://example.com/article'
+```
+
+Other endpoints:
+
+- `GET /feed.xml` — podcast feed
+- `GET /audio/<filename>` — audio files
+- `GET /thumbnails/<filename>` — thumbnails
+- `GET /episodes` — episode management
+- `GET /apidocs/` — Swagger documentation
 
 ## Configuration
 
-Configuration file is located at:
-- macOS: `~/Library/Application Support/podservice/config.yaml`
-- Linux: `~/.config/podservice/config.yaml`
-
-Example configuration:
+The default configuration path is `~/.config/podservice/config.yaml` on Linux
+and `~/Library/Application Support/podservice/config.yaml` on macOS.
 
 ```yaml
 server:
   port: 8083
   host: "0.0.0.0"
+  base_url: "http://localhost:8083"
 
 podcast:
   title: "My Podcast"
   description: "Audio podcast episodes"
-  author: "Pod Service"
+  author: "PodService"
 
 storage:
-  data_dir: "/path/to/storage"
-  audio_dir: "/path/to/storage/audio"
+  data_dir: "./data"
+  audio_dir: "./data/audio"
 
-watch:
-  file: "/path/to/urls.txt"
+rabbitmq:
+  host: "127.0.0.1"
+  port: 5672
+  username: "guest"
+  password_file: null
+  virtual_host: "/"
+  exchange: "podservice.commands"
+  queue: "podservice.downloads"
+  routing_key: "download.requested"
+  retry_delays: [30, 300, 1800]
+  reconnect_delay: 5
+
+log_level: "INFO"
+```
+
+## Processing flow
+
+1. The web interface or API publishes a `DownloadJob` to RabbitMQ.
+2. The consumer reserves one job at a time and downloads its URL with yt-dlp.
+3. Episode metadata is saved as JSON and the audio is stored under `audio/`.
+4. The episode is added to the in-memory feed and the message is acknowledged.
+5. Failed jobs wait 30 seconds, 5 minutes, and 30 minutes between attempts, then
+   move to `podservice.downloads.dead`.
+
+Messages are persistent and publisher confirms are required before the API
+reports acceptance. Consumers use manual acknowledgements so an interrupted
+download remains available for another attempt.
+
+Episode metadata uses `source_url` and remains compatible with legacy
+`youtube_url` records:
+
+```json
+{
+  "title": "Episode Title",
+  "description": "...",
+  "audio_file": "/path/to/audio.mp3",
+  "audio_url": "http://localhost:8083/audio/file.mp3",
+  "pub_date": "2025-12-21T10:00:00",
+  "duration": 3600,
+  "file_size": 12345678,
+  "source_url": "https://original-source-url",
+  "image_url": "http://localhost:8083/thumbnails/thumb.jpg"
+}
+```
+
+## Project structure
+
+```text
+podservice/
+├── cli.py          # Click CLI
+├── config.py       # YAML configuration
+├── daemon.py       # Process lifecycle
+├── downloader.py   # yt-dlp integration
+├── episodes.py     # Download/feed coordination
+├── feed.py         # RSS feed and episode model
+├── messaging.py    # RabbitMQ jobs, topology, publisher, and consumer
+├── server.py       # Flask web interface and API
+└── utils.py        # Shared utilities
+```
+
+The main classes are `PodService`, `PodcastServer`, `EpisodeService`,
+`MediaDownloader`, `PodcastFeed`, `RabbitMQPublisher`, and `RabbitMQConsumer`.
+
+## Development
+
+```bash
+make serve   # Run with config.example.yaml
+make info    # Show resolved configuration
+make test    # Run the test suite
+make format  # Format and lint Python files
+make dev     # Enter the Nix development shell
+```
+
+Direct CLI equivalents:
+
+```bash
+podservice serve --config config.example.yaml
+podservice init
+podservice info --config config.example.yaml
 ```
 
 ## Deployment
 
-For production deployment on NixOS or nix-darwin, see [DEPLOYMENT.md](DEPLOYMENT.md).
+The flake exports the podservice package through `packages`, the NixOS module
+through `nixosModules.default`, and the nix-darwin module through
+`darwinModules.default`. See [DEPLOYMENT.md](DEPLOYMENT.md) for configuration
+and service-management examples.
 
-## How It Works
+## Troubleshooting
 
-1. Service watches a text file for URLs
-2. When URLs are detected, yt-dlp downloads the audio as MP3
-3. Episode metadata is extracted and saved (gracefully handles sources with limited metadata)
-4. The podcast feed XML is updated automatically
-5. Audio files are served via HTTP
-6. Successfully processed URLs are removed from the watch file
-
-## Project Structure
-
-```
-podservice/
-├── __init__.py       # Package initialization
-├── __main__.py       # Module entry point
-├── cli.py            # CLI interface
-├── config.py         # Configuration management
-├── daemon.py         # Main service daemon
-├── downloader.py     # Media downloader (yt-dlp)
-├── feed.py           # Podcast RSS feed generator
-├── server.py         # HTTP server (Flask)
-└── watcher.py        # File watching (watchdog)
-```
-
-## Similar Projects
-
-This service is inspired by:
-
-- [podsync](https://github.com/mxpv/podsync) - Full-featured YouTube/Vimeo to podcast converter (Go)
-
-Podservice is simpler and more focused: URLs to podcast episodes via yt-dlp.
-
-## Requirements
-
-- Python 3.8+
-- ffmpeg (for audio conversion)
-- yt-dlp
+- Check the podservice and RabbitMQ logs when jobs are not being processed.
+- Inspect `podservice.downloads.dead` for jobs that exhausted their retries.
+- Check the `audio/` and `metadata/` directories when the feed is missing an
+  episode.
+- Run `ffmpeg -version` and `yt-dlp <url>` from the development shell when a
+  source cannot be downloaded.
 
 ## License
 
