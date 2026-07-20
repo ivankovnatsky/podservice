@@ -123,6 +123,62 @@ kafka:
 log_level: "INFO"
 ```
 
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser["Browser / API client"] --> Proxy["Caddy"]
+    Podcast["Podcast client"] --> Proxy
+    Proxy --> Web["Podservice web and API"]
+
+    subgraph Podservice
+        Web --> Publisher["RabbitMQ publisher"]
+        Consumer["RabbitMQ consumer"] --> Worker["Download worker"]
+        Worker --> Tools["yt-dlp and ffmpeg"]
+        Tools --> Media["Audio, metadata, and thumbnails"]
+        Media --> Feed["RSS feed"]
+
+        Web -. "download.requested" .-> Events["SQLite event store and outbox"]
+        Consumer -. "lifecycle events" .-> Events
+        Events --> Outbox["Kafka outbox publisher"]
+        Projection["Kafka projection consumer"] --> Events
+
+        Web --> Status["Data Status UI and API"]
+        Status --> Events
+    end
+
+    subgraph RabbitMQ
+        Rabbit["RabbitMQ broker"] --> Exchange["Command exchange"]
+        Exchange --> Downloads["Download queue"]
+        Consumer -->|"failed attempt"| Retries["TTL retry queues"]
+        Retries -->|"delayed redelivery"| Exchange
+        Consumer -->|"retries exhausted"| Dead["Dead-letter queue"]
+    end
+
+    Publisher -->|"confirmed persistent job"| Rabbit
+    Downloads --> Consumer
+
+    subgraph Kafka
+        KafkaBroker["Kafka broker"] --- Topic["Lifecycle topic"]
+    end
+
+    Outbox -->|"confirmed event"| KafkaBroker
+    Topic --> Projection
+
+    Feed --> Proxy
+    Status -->|"management API"| Rabbit
+    Status -->|"broker, topic, and lag probes"| KafkaBroker
+
+    Kuma["Uptime Kuma"] -. "HTTP and TCP checks" .-> Proxy
+    Kuma -.-> Rabbit
+    Kuma -.-> KafkaBroker
+```
+
+RabbitMQ owns durable download commands and retry delivery. Kafka keeps the
+replayable lifecycle stream, while SQLite provides the persistent outbox and
+read model used by the Data Status page. The brokers and management endpoints
+can remain loopback-only when Podservice and monitoring run on the same host.
+
 ## Processing flow
 
 1. The web interface or API publishes a `DownloadJob` to RabbitMQ.
