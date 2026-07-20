@@ -154,8 +154,8 @@ podservice/
 ## Similar Projects
 
 This service is inspired by:
+
 - [podsync](https://github.com/mxpv/podsync) - Full-featured YouTube/Vimeo to podcast converter (Go)
-- [textcast](https://github.com/ivankovnatsky/textcast) - Text-to-speech podcast service (Python)
 
 Podservice is simpler and more focused: URLs to podcast episodes via yt-dlp.
 
