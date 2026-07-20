@@ -11,6 +11,9 @@ from .config import ServiceConfig, load_config
 from .downloader import MediaDownloader
 from .episodes import EpisodeService
 from .events import (
+    PARTIAL_UPLOAD_SUFFIX,
+    SOURCE_TYPE_FILE,
+    SOURCE_TYPE_URL,
     KafkaLifecyclePublisher,
     KafkaProjectionConsumer,
     KafkaStatusProbe,
@@ -104,6 +107,7 @@ class PodService:
             kafka_status=self.kafka_status.snapshot,
             database_status=self.event_store.status,
             recent_events=self.event_store.recent,
+            emit_upload_event=self._emit_upload_lifecycle,
         )
 
         # Set up signal handlers
@@ -135,6 +139,7 @@ class PodService:
         try:
             self.kafka_publisher.start()
             self.kafka_projection.start()
+            self._cleanup_partial_uploads()
             self._migrate_legacy_urls()
             self.consumer.start()
             self.server.start()
@@ -182,13 +187,52 @@ class PodService:
         job: DownloadJob,
         detail: Optional[str] = None,
     ) -> None:
+        self._emit_event(
+            event_type=event_type,
+            job_id=job.job_id,
+            source=job.url,
+            attempt=job.attempt,
+            source_type=SOURCE_TYPE_URL,
+            detail=detail,
+        )
+
+    def _emit_upload_lifecycle(
+        self,
+        event_type: str,
+        job_id: str,
+        filename: str,
+        batch_id: Optional[str] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        self._emit_event(
+            event_type=event_type,
+            job_id=job_id,
+            source=filename,
+            attempt=0,
+            source_type=SOURCE_TYPE_FILE,
+            batch_id=batch_id,
+            detail=detail,
+        )
+
+    def _emit_event(
+        self,
+        event_type: str,
+        job_id: str,
+        source: str,
+        attempt: int,
+        source_type: str,
+        batch_id: Optional[str] = None,
+        detail: Optional[str] = None,
+    ) -> None:
         try:
             self.kafka_publisher.publish(
                 LifecycleEvent.create(
                     event_type=event_type,
-                    job_id=job.job_id,
-                    url=job.url,
-                    attempt=job.attempt,
+                    job_id=job_id,
+                    source=source,
+                    attempt=attempt,
+                    source_type=source_type,
+                    batch_id=batch_id,
                     detail=detail,
                 )
             )
@@ -196,8 +240,23 @@ class PodService:
             logger.exception(
                 "Unable to emit Kafka lifecycle event %s for job %s",
                 event_type,
-                job.job_id,
+                job_id,
             )
+
+    def _cleanup_partial_uploads(self) -> None:
+        """Discard uploads interrupted by a previous shutdown.
+
+        A .partial file is a truncated fragment, never a recoverable episode.
+        """
+        audio_dir = Path(self.config.storage.audio_dir)
+        if not audio_dir.is_dir():
+            return
+        for partial in audio_dir.glob(f"*{PARTIAL_UPLOAD_SUFFIX}"):
+            try:
+                partial.unlink()
+                logger.info("Removed interrupted upload: %s", partial.name)
+            except OSError as exc:
+                logger.warning("Unable to remove %s: %s", partial.name, exc)
 
     def _migrate_legacy_urls(self) -> None:
         if not self.config.legacy_urls_file:

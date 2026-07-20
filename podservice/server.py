@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 from urllib.parse import quote
+from uuid import uuid4
 
 from flasgger import Swagger
 from flask import (
@@ -24,7 +25,12 @@ from markupsafe import escape
 from werkzeug.utils import secure_filename
 
 from .config import ServiceConfig
-from .events import DatabaseStatus, KafkaStatus, LifecycleEvent
+from .events import (
+    PARTIAL_UPLOAD_SUFFIX,
+    DatabaseStatus,
+    KafkaStatus,
+    LifecycleEvent,
+)
 from .feed import Episode, PodcastFeed, save_episode_metadata
 from .messaging import DownloadJob, MessagePublishError, PartialPublishError
 from .status import RabbitMQStatus
@@ -90,6 +96,7 @@ class PodcastServer:
         kafka_status: Optional[Callable[[], KafkaStatus]] = None,
         database_status: Optional[Callable[[], DatabaseStatus]] = None,
         recent_events: Optional[Callable[[int], list[LifecycleEvent]]] = None,
+        emit_upload_event: Optional[Callable[..., None]] = None,
     ):
         self.config = config
         self.feed = feed
@@ -98,6 +105,7 @@ class PodcastServer:
         self.kafka_status = kafka_status
         self.database_status = database_status
         self.recent_events = recent_events
+        self.emit_upload_event = emit_upload_event
         self.csrf_token = secrets.token_urlsafe(32)
         self.app = Flask(__name__)
         self.swagger = Swagger(
@@ -402,14 +410,15 @@ class PodcastServer:
                     <td><span class="event-type">{escape(event.event_type)}</span></td>
                     <td class="technical">{escape(event.job_id)}</td>
                     <td>{event.attempt}</td>
-                    <td class="url">{escape(event.url)}</td>
+                    <td><span class="source-type">{escape(event.source_type)}</span></td>
+                    <td class="source">{escape(event.source)}</td>
                     <td>{escape(event.detail or "")}</td>
                 </tr>
                 """
                 for event in events
             )
             if not event_rows:
-                event_rows = '<tr><td colspan="6" class="empty">No lifecycle events projected yet.</td></tr>'
+                event_rows = '<tr><td colspan="7" class="empty">No lifecycle events projected yet.</td></tr>'
             return f"""
             <!doctype html>
             <html>
@@ -440,7 +449,8 @@ class PodcastServer:
                     th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
                     th {{ color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }}
                     .technical {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }}
-                    .url {{ max-width: 340px; overflow-wrap: anywhere; }}
+                    .source {{ max-width: 340px; overflow-wrap: anywhere; }}
+                    .source-type {{ font-size: 12px; padding: 2px 6px; border-radius: 3px; background-color: #eef1f4; color: #445; }}
                     .event-type {{ border-radius: 999px; padding: 3px 8px; background: #dbeafe; color: #1d4ed8; white-space: nowrap; }}
                     .empty {{ color: #64748b; text-align: center; padding: 24px; }}
                     @media (prefers-color-scheme: dark) {{
@@ -495,7 +505,7 @@ class PodcastServer:
                 </section>
                 <section class="panel">
                     <h2>Recent Kafka lifecycle events</h2>
-                    <table><thead><tr><th>Time</th><th>Event</th><th>Job</th><th>Attempt</th><th>URL</th><th>Detail</th></tr></thead>
+                    <table><thead><tr><th>Time</th><th>Event</th><th>Job</th><th>Attempt</th><th>Type</th><th>Source</th><th>Detail</th></tr></thead>
                     <tbody>{event_rows}</tbody></table>
                 </section>
             </body>
@@ -533,7 +543,7 @@ class PodcastServer:
                 logger.error(f"Error adding URL: {e}", exc_info=True)
                 return redirect(f"/?error={str(e)}")
 
-        @self.app.route("/upload-audio", methods=["POST"])
+        @self.app.route("/upload-audio", methods=["POST"])  # noqa: C901
         def upload_audio():
             """Upload audio files via web form."""
             try:
@@ -552,73 +562,128 @@ class PodcastServer:
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 metadata_dir.mkdir(parents=True, exist_ok=True)
 
+                batch_id = str(uuid4())
                 uploaded_count = 0
+                failed_count = 0
                 for audio_file in audio_files:
                     if audio_file.filename == "":
                         continue
 
                     # Get file info
                     original_filename = secure_filename(audio_file.filename)
-                    file_stem = Path(original_filename).stem
-                    file_ext = Path(original_filename).suffix.lower()
-
-                    # Derive title from filename: remove extension, replace -_ with spaces
-                    title = file_stem.replace("-", " ").replace("_", " ")
-                    if not title:
-                        title = "Untitled"
-
-                    # Sanitize filename for storage
-                    safe_title = sanitize_filename(title)
-                    if not safe_title:
-                        safe_title = file_stem if file_stem else "untitled"
-
-                    # Default extension if missing
-                    if not file_ext:
-                        file_ext = ".mp3"
-
-                    # Determine audio file path with collision handling
-                    audio_path = audio_dir / f"{safe_title}{file_ext}"
-                    counter = 1
-                    while audio_path.exists():
-                        audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
-                        counter += 1
-
-                    # Save the audio file
-                    audio_file.save(str(audio_path))
-                    logger.info(f"Uploaded audio file: {audio_path.name}")
-
-                    # Get file size
-                    file_size = audio_path.stat().st_size
-
-                    # Generate URLs
-                    audio_url = (
-                        f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
-                    )
-                    pub_date = datetime.now()
-
-                    # Create episode
-                    episode = Episode(
-                        title=title,
-                        description=description,
-                        audio_file=str(audio_path),
-                        audio_url=audio_url,
-                        pub_date=pub_date,
-                        duration=0,
-                        file_size=file_size,
-                        source_url="",
-                        image_url="",
+                    job_id = str(uuid4())
+                    self._emit_upload(
+                        "upload.received", job_id, original_filename, batch_id
                     )
 
-                    # Save metadata
-                    metadata_file = metadata_dir / f"{audio_path.stem}.json"
-                    save_episode_metadata(episode, str(metadata_file))
+                    # A failure here must not abandon the rest of the batch.
+                    partial_path = None
+                    stored_path = None
+                    metadata_path = None
+                    try:
+                        file_stem = Path(original_filename).stem
+                        file_ext = Path(original_filename).suffix.lower()
 
-                    # Add to feed
-                    self.feed.add_episode(episode)
+                        # Derive title from filename: remove extension, replace -_ with spaces
+                        title = file_stem.replace("-", " ").replace("_", " ")
+                        if not title:
+                            title = "Untitled"
 
-                    logger.info(f"Created episode via upload: {title}")
-                    uploaded_count += 1
+                        # Sanitize filename for storage
+                        safe_title = sanitize_filename(title)
+                        if not safe_title:
+                            safe_title = file_stem if file_stem else "untitled"
 
+                        # Default extension if missing
+                        if not file_ext:
+                            file_ext = ".mp3"
+
+                        # Determine audio file path with collision handling
+                        audio_path = audio_dir / f"{safe_title}{file_ext}"
+                        counter = 1
+                        while audio_path.exists():
+                            audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
+                            counter += 1
+
+                        # Stage under .partial so an interrupted write is
+                        # identifiable and never mistaken for a real episode.
+                        partial_path = audio_path.with_name(
+                            f"{audio_path.name}{PARTIAL_UPLOAD_SUFFIX}"
+                        )
+                        audio_file.save(str(partial_path))
+                        partial_path.replace(audio_path)
+                        partial_path = None
+                        stored_path = audio_path
+                        logger.info(f"Uploaded audio file: {audio_path.name}")
+
+                        # Get file size
+                        file_size = audio_path.stat().st_size
+
+                        # Generate URLs
+                        audio_url = f"{self.config.server.base_url}/audio/{quote(audio_path.name)}"
+                        pub_date = datetime.now()
+
+                        # Create episode
+                        episode = Episode(
+                            title=title,
+                            description=description,
+                            audio_file=str(audio_path),
+                            audio_url=audio_url,
+                            pub_date=pub_date,
+                            duration=0,
+                            file_size=file_size,
+                            source_url="",
+                            image_url="",
+                        )
+
+                        # Metadata last: its presence marks the episode complete
+                        metadata_file = metadata_dir / f"{audio_path.stem}.json"
+                        save_episode_metadata(episode, str(metadata_file))
+                        metadata_path = metadata_file
+
+                        # Add to feed
+                        self.feed.add_episode(episode)
+
+                        logger.info(f"Created episode via upload: {title}")
+                        uploaded_count += 1
+                        self._emit_upload(
+                            "upload.stored", job_id, original_filename, batch_id
+                        )
+                    except Exception as file_error:
+                        failed_count += 1
+                        logger.error(
+                            "Failed to store uploaded file %s: %s",
+                            original_filename,
+                            file_error,
+                            exc_info=True,
+                        )
+                        # Roll back so a failed file leaves nothing behind: a
+                        # stored audio file without metadata is invisible to the
+                        # feed yet still served, and would pile up on retries.
+                        for leftover in (partial_path, metadata_path, stored_path):
+                            if leftover is None:
+                                continue
+                            try:
+                                leftover.unlink(missing_ok=True)
+                            except OSError as cleanup_error:
+                                logger.warning(
+                                    "Unable to clean up %s: %s",
+                                    leftover,
+                                    cleanup_error,
+                                )
+                        self._emit_upload(
+                            "upload.failed",
+                            job_id,
+                            original_filename,
+                            batch_id,
+                            detail=str(file_error),
+                        )
+
+                if failed_count and not uploaded_count:
+                    return redirect(f"/?error={quote('No files could be uploaded')}")
+                if failed_count:
+                    failure_note = quote(f"{failed_count} file(s) failed")
+                    return redirect(f"/?success={uploaded_count}&error={failure_note}")
                 return redirect(f"/?success={uploaded_count}")
 
             except Exception as e:
@@ -1561,6 +1626,27 @@ class PodcastServer:
     def _valid_csrf_token(self) -> bool:
         token = request.form.get("csrf_token", "")
         return bool(token) and secrets.compare_digest(token, self.csrf_token)
+
+    def _emit_upload(
+        self,
+        event_type: str,
+        job_id: str,
+        filename: str,
+        batch_id: str,
+        detail: Optional[str] = None,
+    ) -> None:
+        if self.emit_upload_event is None:
+            return
+        try:
+            self.emit_upload_event(
+                event_type=event_type,
+                job_id=job_id,
+                filename=filename,
+                batch_id=batch_id,
+                detail=detail,
+            )
+        except Exception:
+            logger.exception("Unable to emit upload event %s", event_type)
 
     def start(self):
         """Start the server in a separate thread."""

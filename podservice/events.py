@@ -20,16 +20,25 @@ from .config import KafkaConfig
 logger = logging.getLogger(__name__)
 
 
+PARTIAL_UPLOAD_SUFFIX = ".partial"
+
+SOURCE_TYPE_URL = "url"
+SOURCE_TYPE_FILE = "file"
+SOURCE_TYPES = frozenset({SOURCE_TYPE_URL, SOURCE_TYPE_FILE})
+
+
 @dataclass(frozen=True)
 class LifecycleEvent:
-    """A download lifecycle fact published to Kafka."""
+    """An ingestion lifecycle fact published to Kafka."""
 
     event_id: str
     event_type: str
     occurred_at: str
     job_id: str
-    url: str
+    source: str
     attempt: int
+    source_type: str = SOURCE_TYPE_URL
+    batch_id: Optional[str] = None
     detail: Optional[str] = None
 
     @classmethod
@@ -37,8 +46,10 @@ class LifecycleEvent:
         cls,
         event_type: str,
         job_id: str,
-        url: str,
+        source: str,
         attempt: int,
+        source_type: str = SOURCE_TYPE_URL,
+        batch_id: Optional[str] = None,
         detail: Optional[str] = None,
     ) -> "LifecycleEvent":
         return cls(
@@ -46,8 +57,10 @@ class LifecycleEvent:
             event_type=event_type,
             occurred_at=datetime.now(timezone.utc).isoformat(),
             job_id=job_id,
-            url=url,
+            source=source,
             attempt=attempt,
+            source_type=source_type,
+            batch_id=batch_id,
             detail=detail,
         )
 
@@ -55,6 +68,10 @@ class LifecycleEvent:
     def from_dict(cls, data: dict) -> "LifecycleEvent":
         if not isinstance(data, dict):
             raise ValueError("Lifecycle event must be an object")
+        # Events produced before the source rename are still in the topic.
+        if "url" in data and "source" not in data:
+            data = {**data, "source": data["url"]}
+            data.pop("url")
         try:
             event = cls(**data)
         except TypeError as exc:
@@ -67,12 +84,14 @@ class LifecycleEvent:
                     event.event_type,
                     event.occurred_at,
                     event.job_id,
-                    event.url,
+                    event.source,
                 )
             )
+            or event.source_type not in SOURCE_TYPES
             or not isinstance(event.attempt, int)
             or isinstance(event.attempt, bool)
             or event.attempt < 0
+            or (event.batch_id is not None and not isinstance(event.batch_id, str))
             or (event.detail is not None and not isinstance(event.detail, str))
         ):
             raise ValueError("Invalid lifecycle event")
@@ -114,8 +133,10 @@ class LifecycleEventStore:
                         event_type TEXT NOT NULL,
                         occurred_at TEXT NOT NULL,
                         job_id TEXT NOT NULL,
-                        url TEXT NOT NULL,
+                        source TEXT NOT NULL,
                         attempt INTEGER NOT NULL,
+                        source_type TEXT NOT NULL DEFAULT 'url',
+                        batch_id TEXT,
                         detail TEXT,
                         kafka_published_at TEXT
                     )
@@ -132,6 +153,19 @@ class LifecycleEventStore:
                     )
                     connection.execute(
                         "UPDATE lifecycle_events SET kafka_published_at = occurred_at"
+                    )
+                if "source" not in columns and "url" in columns:
+                    connection.execute(
+                        "ALTER TABLE lifecycle_events RENAME COLUMN url TO source"
+                    )
+                if "source_type" not in columns:
+                    connection.execute(
+                        "ALTER TABLE lifecycle_events "
+                        "ADD COLUMN source_type TEXT NOT NULL DEFAULT 'url'"
+                    )
+                if "batch_id" not in columns:
+                    connection.execute(
+                        "ALTER TABLE lifecycle_events ADD COLUMN batch_id TEXT"
                     )
                 connection.execute(
                     """
@@ -155,17 +189,19 @@ class LifecycleEventStore:
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO lifecycle_events (
-                        event_id, event_type, occurred_at, job_id, url, attempt,
-                        detail, kafka_published_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        event_id, event_type, occurred_at, job_id, source, attempt,
+                        source_type, batch_id, detail, kafka_published_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.event_id,
                         event.event_type,
                         event.occurred_at,
                         event.job_id,
-                        event.url,
+                        event.source,
                         event.attempt,
+                        event.source_type,
+                        event.batch_id,
                         event.detail,
                         published_at,
                     ),
@@ -185,7 +221,8 @@ class LifecycleEventStore:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT event_id, event_type, occurred_at, job_id, url, attempt, detail
+                SELECT event_id, event_type, occurred_at, job_id, source, attempt,
+                       source_type, batch_id, detail
                 FROM lifecycle_events
                 WHERE kafka_published_at IS NULL
                 ORDER BY occurred_at, event_id
@@ -260,7 +297,8 @@ class LifecycleEventStore:
         with closing(self._connect()) as connection:
             rows = connection.execute(
                 """
-                SELECT event_id, event_type, occurred_at, job_id, url, attempt, detail
+                SELECT event_id, event_type, occurred_at, job_id, source, attempt,
+                       source_type, batch_id, detail
                 FROM lifecycle_events
                 ORDER BY occurred_at DESC
                 LIMIT ?

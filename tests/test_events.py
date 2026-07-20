@@ -31,7 +31,7 @@ def make_event():
         event_type="download.succeeded",
         occurred_at="2026-07-20T12:00:00+00:00",
         job_id="job-1",
-        url="https://example.com/episode",
+        source="https://example.com/episode",
         attempt=0,
     )
 
@@ -59,6 +59,24 @@ def test_event_store_projects_events_idempotently(tmp_path):
     assert status.last_event_at == event.occurred_at
 
 
+def test_from_dict_accepts_events_produced_before_the_source_rename():
+    legacy = {
+        "event_id": "event-1",
+        "event_type": "download.succeeded",
+        "occurred_at": "2026-07-20T12:00:00+00:00",
+        "job_id": "job-1",
+        "url": "https://example.com/episode",
+        "attempt": 0,
+        "detail": None,
+    }
+
+    event = LifecycleEvent.from_dict(legacy)
+
+    assert event.source == "https://example.com/episode"
+    assert event.source_type == "url"
+    assert event.batch_id is None
+
+
 def test_event_store_migrates_existing_projection_as_published(tmp_path):
     database = tmp_path / "events.sqlite3"
     with sqlite3.connect(database) as connection:
@@ -77,8 +95,20 @@ def test_event_store_migrates_existing_projection_as_published(tmp_path):
         )
         event = make_event()
         connection.execute(
-            "INSERT INTO lifecycle_events VALUES (?, ?, ?, ?, ?, ?, ?)",
-            tuple(event.__dict__.values()),
+            """
+            INSERT INTO lifecycle_events (
+                event_id, event_type, occurred_at, job_id, url, attempt, detail
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.event_type,
+                event.occurred_at,
+                event.job_id,
+                event.source,
+                event.attempt,
+                event.detail,
+            ),
         )
 
     store = LifecycleEventStore(database)
@@ -261,7 +291,7 @@ def test_projection_commits_past_malformed_json(tmp_path):
         partition=0,
         offset=2,
         value=json.dumps(
-            {**make_event().__dict__, "url": ["not", "a", "string"]}
+            {**make_event().__dict__, "source": ["not", "a", "string"]}
         ).encode(),
     )
     valid = SimpleNamespace(

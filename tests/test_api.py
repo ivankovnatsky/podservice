@@ -10,7 +10,7 @@ import pytest
 
 from podservice.config import PodcastConfig, ServerConfig, ServiceConfig, StorageConfig
 from podservice.events import DatabaseStatus, KafkaStatus, LifecycleEvent
-from podservice.feed import PodcastFeed
+from podservice.feed import PodcastFeed, save_episode_metadata
 from podservice.messaging import DownloadJob, MessagePublishError, PartialPublishError
 from podservice.server import PodcastServer
 from podservice.status import RabbitMQQueueStatus, RabbitMQStatus
@@ -521,6 +521,143 @@ class TestHtmlEscaping:
         assert not audio_file.exists()
 
 
+class TestAudioUpload:
+    def _upload(self, server, files):
+        server.app.config["TESTING"] = True
+        with server.app.test_client() as client:
+            return client.post(
+                "/upload-audio",
+                data={
+                    "csrf_token": server.csrf_token,
+                    "audio": files,
+                },
+                content_type="multipart/form-data",
+            )
+
+    def test_uploads_emit_file_scoped_events_sharing_a_batch(
+        self, test_config, test_feed
+    ):
+        emit = Mock()
+        server = PodcastServer(test_config, test_feed, emit_upload_event=emit)
+
+        response = self._upload(
+            server,
+            [
+                (io.BytesIO(b"audio-one"), "first.mp3"),
+                (io.BytesIO(b"audio-two"), "second.mp3"),
+            ],
+        )
+
+        assert response.status_code == 302
+        stored = [
+            call.kwargs
+            for call in emit.call_args_list
+            if call.kwargs["event_type"] == "upload.stored"
+        ]
+        assert [call["filename"] for call in stored] == ["first.mp3", "second.mp3"]
+        # One batch, distinct per-file jobs, so a partial batch stays legible.
+        assert len({call["batch_id"] for call in stored}) == 1
+        assert len({call["job_id"] for call in stored}) == 2
+
+    def test_one_failing_file_does_not_abort_the_batch(self, test_config, test_feed):
+        emit = Mock()
+        server = PodcastServer(test_config, test_feed, emit_upload_event=emit)
+        real_save = save_episode_metadata
+
+        def fail_second(episode, path):
+            if "second" in str(path):
+                raise OSError("disk full")
+            return real_save(episode, path)
+
+        with patch("podservice.server.save_episode_metadata", side_effect=fail_second):
+            response = self._upload(
+                server,
+                [
+                    (io.BytesIO(b"audio-one"), "first.mp3"),
+                    (io.BytesIO(b"audio-two"), "second.mp3"),
+                    (io.BytesIO(b"audio-three"), "third.mp3"),
+                ],
+            )
+
+        assert response.status_code == 302
+        by_type = {}
+        for call in emit.call_args_list:
+            by_type.setdefault(call.kwargs["event_type"], []).append(
+                call.kwargs["filename"]
+            )
+        assert by_type["upload.stored"] == ["first.mp3", "third.mp3"]
+        assert by_type["upload.failed"] == ["second.mp3"]
+
+        failed = next(
+            call.kwargs
+            for call in emit.call_args_list
+            if call.kwargs["event_type"] == "upload.failed"
+        )
+        assert "disk full" in failed["detail"]
+
+    def test_interrupted_upload_leaves_no_partial_file(self, test_config, test_feed):
+        server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
+
+        with patch(
+            "podservice.server.save_episode_metadata", side_effect=OSError("boom")
+        ):
+            self._upload(server, [(io.BytesIO(b"audio"), "broken.mp3")])
+
+        audio_dir = Path(test_config.storage.audio_dir)
+        assert not list(audio_dir.glob("*.partial"))
+
+    def test_failure_after_rename_leaves_no_orphaned_audio(
+        self, test_config, test_feed
+    ):
+        server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
+
+        # Fails after the audio file is already renamed into place.
+        with patch(
+            "podservice.server.save_episode_metadata", side_effect=OSError("boom")
+        ):
+            self._upload(server, [(io.BytesIO(b"audio"), "orphan.mp3")])
+
+        audio_dir = Path(test_config.storage.audio_dir)
+        assert not list(audio_dir.glob("*.mp3"))
+        assert not list(Path(test_config.storage.metadata_dir).glob("*.json"))
+
+    def test_failure_in_feed_removes_written_metadata(self, test_config, test_feed):
+        server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
+
+        with patch.object(test_feed, "add_episode", side_effect=RuntimeError("nope")):
+            self._upload(server, [(io.BytesIO(b"audio"), "late.mp3")])
+
+        assert not list(Path(test_config.storage.audio_dir).glob("*.mp3"))
+        assert not list(Path(test_config.storage.metadata_dir).glob("*.json"))
+
+    def test_partial_batch_redirect_is_url_encoded(self, test_config, test_feed):
+        server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
+
+        def fail_second(episode, path):
+            if "second" in str(path):
+                raise OSError("disk full")
+            return save_episode_metadata(episode, path)
+
+        with patch("podservice.server.save_episode_metadata", side_effect=fail_second):
+            response = self._upload(
+                server,
+                [
+                    (io.BytesIO(b"one"), "first.mp3"),
+                    (io.BytesIO(b"two"), "second.mp3"),
+                ],
+            )
+
+        assert " " not in response.headers["Location"]
+
+    def test_upload_works_without_an_event_emitter(self, test_config, test_feed):
+        server = PodcastServer(test_config, test_feed)
+
+        response = self._upload(server, [(io.BytesIO(b"audio"), "solo.mp3")])
+
+        assert response.status_code == 302
+        assert list(Path(test_config.storage.audio_dir).glob("*.mp3"))
+
+
 class TestMessagingStatus:
     def test_dashboard_and_json_report_broker_state(self, test_config, test_feed):
         rabbitmq = RabbitMQStatus(
@@ -549,7 +686,7 @@ class TestMessagingStatus:
             event_type="download.succeeded",
             occurred_at="2026-07-20T12:00:00+00:00",
             job_id="job-1",
-            url="https://example.com/episode?a=1&b=2",
+            source="https://example.com/episode?a=1&b=2",
             attempt=0,
         )
         server = PodcastServer(
