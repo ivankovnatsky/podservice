@@ -362,6 +362,7 @@ class PodcastServer:
                     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1180px; margin: 32px auto; padding: 0 20px 40px; background: #f6f7fb; color: #172033; }}
                     a {{ color: #2563eb; }}
                     .header {{ display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; }}
+                    .header-title {{ text-align: right; }}
                     .header h1 {{ margin-bottom: 4px; }}
                     .header p {{ margin: 0; color: #64748b; }}
                     .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-bottom: 24px; }}
@@ -392,8 +393,8 @@ class PodcastServer:
             </head>
             <body>
                 <div class="header">
-                    <div><h1>Data Status</h1><p>Refreshes every 15 seconds</p></div>
                     <a href="/">← Podservice</a>
+                    <div class="header-title"><h1>Data Status</h1><p>Refreshes every 15 seconds</p></div>
                 </div>
                 <div class="cards">
                     <section class="card">

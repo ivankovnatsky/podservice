@@ -541,6 +541,9 @@ class TestMessagingStatus:
 
         assert dashboard.status_code == 200
         assert b"Data Status" in dashboard.data
+        assert dashboard.data.index(b'<a href="/">') < dashboard.data.index(
+            b"Data Status</h1>"
+        )
         assert b"SQLite" in dashboard.data
         assert b"RabbitMQ queues" in dashboard.data
         assert b"Recent Kafka lifecycle events" in dashboard.data
