@@ -135,6 +135,11 @@ log_level: "INFO"
 7. A consumer projects events into `db/podservice.sqlite3` for the status
    dashboard; Kafka remains the replayable source of the event history.
 
+Lifecycle events enter a SQLite outbox before Kafka publication. Broker outages
+leave events pending locally, and a background publisher retries them until
+Kafka acknowledges delivery. The status dashboard shows the pending outbox
+count.
+
 Messages are persistent and publisher confirms are required before the API
 reports acceptance. Consumers use manual acknowledgements so an interrupted
 download remains available for another attempt.

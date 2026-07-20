@@ -1,11 +1,12 @@
 """Tests for Kafka lifecycle events and their SQLite projection."""
 
 import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 from kafka import TopicPartition
-from kafka.errors import NoBrokersAvailable
+from kafka.errors import KafkaTimeoutError, NoBrokersAvailable
 
 from podservice.config import KafkaConfig
 from podservice.events import (
@@ -43,6 +44,41 @@ def test_event_store_projects_events_idempotently(tmp_path):
     store.append(event)
 
     assert store.recent() == [event]
+    assert store.pending() == [event]
+    assert store.pending_count() == 1
+
+    store.mark_published(event.event_id)
+
+    assert store.pending() == []
+    assert store.pending_count() == 0
+
+
+def test_event_store_migrates_existing_projection_as_published(tmp_path):
+    database = tmp_path / "events.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            CREATE TABLE lifecycle_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                job_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                detail TEXT
+            )
+            """
+        )
+        event = make_event()
+        connection.execute(
+            "INSERT INTO lifecycle_events VALUES (?, ?, ?, ?, ?, ?, ?)",
+            tuple(event.__dict__.values()),
+        )
+
+    store = LifecycleEventStore(database)
+
+    assert store.recent() == [make_event()]
+    assert store.pending_count() == 0
 
 
 def test_topic_manager_creates_lifecycle_topic_once():
@@ -63,37 +99,93 @@ def test_topic_manager_creates_lifecycle_topic_once():
     admin.close.assert_called_once()
 
 
-def test_publisher_sends_keyed_lifecycle_event():
+def test_publisher_delivers_persisted_lifecycle_event(tmp_path):
     manager = Mock()
     producer = Mock()
     future = Mock()
     producer.send.return_value = future
+    store = LifecycleEventStore(tmp_path / "events.sqlite3")
     publisher = KafkaLifecyclePublisher(
         kafka_config(),
         manager,
+        store,
         producer_factory=Mock(return_value=producer),
     )
 
-    publisher.start()
     publisher.publish(make_event())
+    assert store.pending_count() == 1
+
+    assert publisher._deliver_pending() is True
 
     manager.ensure_topic.assert_called_once()
     sent = producer.send.call_args
     assert sent.args == ("lifecycle",)
     assert sent.kwargs["key"] == "job-1"
     assert sent.kwargs["value"]["event_id"] == "event-1"
-    future.add_errback.assert_called_once()
+    future.get.assert_called_once_with(timeout=10)
+    assert store.pending_count() == 0
 
 
-def test_publisher_degrades_when_kafka_is_unavailable():
+def test_publisher_retains_outbox_when_kafka_is_unavailable(tmp_path):
     manager = Mock()
     manager.ensure_topic.side_effect = NoBrokersAvailable()
-    publisher = KafkaLifecyclePublisher(kafka_config(), manager)
+    store = LifecycleEventStore(tmp_path / "events.sqlite3")
+    publisher = KafkaLifecyclePublisher(kafka_config(), manager, store)
 
-    publisher.start()
     publisher.publish(make_event())
 
+    assert publisher._deliver_pending() is False
     assert publisher.producer is None
+    assert store.pending() == [make_event()]
+
+
+def test_publisher_records_analytics_without_pending_when_kafka_is_disabled(
+    tmp_path,
+):
+    store = LifecycleEventStore(tmp_path / "events.sqlite3")
+    publisher = KafkaLifecyclePublisher(
+        kafka_config(enabled=False),
+        Mock(),
+        store,
+    )
+
+    publisher.publish(make_event())
+
+    assert store.recent() == [make_event()]
+    assert store.pending_count() == 0
+
+
+def test_publisher_retries_after_transient_outbox_error():
+    store = Mock()
+    publisher = KafkaLifecyclePublisher(kafka_config(), Mock(), store)
+
+    def fail_once():
+        publisher.stop_event.set()
+        raise sqlite3.OperationalError("database is locked")
+
+    store.pending.side_effect = fail_once
+
+    publisher._run()
+
+
+def test_publisher_retains_outbox_after_delivery_failure(tmp_path):
+    manager = Mock()
+    producer = Mock()
+    producer.send.side_effect = KafkaTimeoutError("timed out")
+    store = LifecycleEventStore(tmp_path / "events.sqlite3")
+    publisher = KafkaLifecyclePublisher(
+        kafka_config(),
+        manager,
+        store,
+        producer_factory=Mock(return_value=producer),
+    )
+    publisher.publish(make_event())
+
+    assert publisher._deliver_pending() is False
+
+    assert store.pending() == [make_event()]
+    assert publisher.producer is None
+    producer.close.assert_called_once_with(timeout=0)
 
 
 def test_kafka_status_reports_topic_partitions_and_consumer_lag():
@@ -158,16 +250,24 @@ def test_projection_commits_past_malformed_json(tmp_path):
         offset=1,
         value=b"{invalid",
     )
-    valid = SimpleNamespace(
+    invalid_types = SimpleNamespace(
         topic="lifecycle",
         partition=0,
         offset=2,
+        value=json.dumps(
+            {**make_event().__dict__, "url": ["not", "a", "string"]}
+        ).encode(),
+    )
+    valid = SimpleNamespace(
+        topic="lifecycle",
+        partition=0,
+        offset=3,
         value=json.dumps(make_event().__dict__).encode(),
     )
 
     def poll(**kwargs):
         projection.stop_event.set()
-        return {TopicPartition("lifecycle", 0): [invalid, valid]}
+        return {TopicPartition("lifecycle", 0): [invalid, invalid_types, valid]}
 
     consumer.poll.side_effect = poll
 
@@ -175,3 +275,4 @@ def test_projection_commits_past_malformed_json(tmp_path):
 
     consumer.commit.assert_called_once()
     assert projection.store.recent() == [make_event()]
+    assert projection.store.pending_count() == 0

@@ -4,7 +4,6 @@ import json
 import logging
 import sqlite3
 import threading
-import time
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -61,14 +60,20 @@ class LifecycleEvent:
         except TypeError as exc:
             raise ValueError("Invalid lifecycle event") from exc
         if (
-            not event.event_id
-            or not event.event_type
-            or not event.occurred_at
-            or not event.job_id
-            or not event.url
+            not all(
+                isinstance(value, str) and value
+                for value in (
+                    event.event_id,
+                    event.event_type,
+                    event.occurred_at,
+                    event.job_id,
+                    event.url,
+                )
+            )
             or not isinstance(event.attempt, int)
             or isinstance(event.attempt, bool)
             or event.attempt < 0
+            or (event.detail is not None and not isinstance(event.detail, str))
         ):
             raise ValueError("Invalid lifecycle event")
         return event
@@ -100,25 +105,48 @@ class LifecycleEventStore:
                         job_id TEXT NOT NULL,
                         url TEXT NOT NULL,
                         attempt INTEGER NOT NULL,
-                        detail TEXT
+                        detail TEXT,
+                        kafka_published_at TEXT
                     )
                     """
                 )
+                columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(lifecycle_events)")
+                }
+                if "kafka_published_at" not in columns:
+                    connection.execute(
+                        "ALTER TABLE lifecycle_events "
+                        "ADD COLUMN kafka_published_at TEXT"
+                    )
+                    connection.execute(
+                        "UPDATE lifecycle_events SET kafka_published_at = occurred_at"
+                    )
                 connection.execute(
                     """
                     CREATE INDEX IF NOT EXISTS lifecycle_events_occurred_at
                     ON lifecycle_events (occurred_at DESC)
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS lifecycle_events_outbox
+                    ON lifecycle_events (kafka_published_at, occurred_at)
+                    """
+                )
 
-    def append(self, event: LifecycleEvent) -> None:
+    def append(self, event: LifecycleEvent, kafka_published: bool = False) -> None:
+        published_at = (
+            datetime.now(timezone.utc).isoformat() if kafka_published else None
+        )
         with closing(self._connect()) as connection:
             with connection:
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO lifecycle_events (
-                        event_id, event_type, occurred_at, job_id, url, attempt, detail
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        event_id, event_type, occurred_at, job_id, url, attempt,
+                        detail, kafka_published_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event.event_id,
@@ -128,8 +156,56 @@ class LifecycleEventStore:
                         event.url,
                         event.attempt,
                         event.detail,
+                        published_at,
                     ),
                 )
+                if kafka_published:
+                    connection.execute(
+                        """
+                        UPDATE lifecycle_events
+                        SET kafka_published_at = COALESCE(kafka_published_at, ?)
+                        WHERE event_id = ?
+                        """,
+                        (published_at, event.event_id),
+                    )
+
+    def pending(self, limit: int = 100) -> list[LifecycleEvent]:
+        safe_limit = max(1, min(limit, 1000))
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT event_id, event_type, occurred_at, job_id, url, attempt, detail
+                FROM lifecycle_events
+                WHERE kafka_published_at IS NULL
+                ORDER BY occurred_at, event_id
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        return [LifecycleEvent(**dict(row)) for row in rows]
+
+    def mark_published(self, event_id: str) -> None:
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute(
+                    """
+                    UPDATE lifecycle_events
+                    SET kafka_published_at = ?
+                    WHERE event_id = ?
+                    """,
+                    (datetime.now(timezone.utc).isoformat(), event_id),
+                )
+
+    def pending_count(self) -> int:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM lifecycle_events
+                WHERE kafka_published_at IS NULL
+                """
+            ).fetchone()
+        return int(row["count"])
 
     def recent(self, limit: int = 50) -> list[LifecycleEvent]:
         safe_limit = max(1, min(limit, 200))
@@ -193,27 +269,39 @@ class KafkaLifecyclePublisher:
         self,
         config: KafkaConfig,
         topic_manager: KafkaTopicManager,
+        store: LifecycleEventStore,
         producer_factory=KafkaProducer,
     ):
         self.config = config
         self.topic_manager = topic_manager
+        self.store = store
         self.producer_factory = producer_factory
         self.producer = None
         self.lock = threading.Lock()
-        self.next_start_attempt = 0.0
+        self.stop_event = threading.Event()
+        self.wake_event = threading.Event()
+        self.thread = None
 
     def start(self) -> None:
-        if not self.config.enabled or self.producer is not None:
+        if not self.config.enabled:
             return
-        with self.lock:
-            self._start_unlocked()
+        if self.thread is not None and self.thread.is_alive():
+            return
+        self.stop_event.clear()
+        self.thread = threading.Thread(
+            target=self._run,
+            name="kafka-lifecycle-publisher",
+            daemon=True,
+        )
+        self.thread.start()
 
-    def _start_unlocked(self) -> None:
-        if self.producer is not None or time.monotonic() < self.next_start_attempt:
-            return
+    def _get_producer(self):
+        with self.lock:
+            if self.producer is not None:
+                return self.producer
         try:
             self.topic_manager.ensure_topic()
-            self.producer = self.producer_factory(
+            producer = self.producer_factory(
                 bootstrap_servers=list(self.config.bootstrap_servers),
                 client_id=f"{self.config.client_id}-producer",
                 acks="all",
@@ -225,61 +313,84 @@ class KafkaLifecyclePublisher:
                 key_serializer=lambda value: value.encode(),
             )
         except (KafkaError, OSError) as exc:
-            self.next_start_attempt = time.monotonic() + self.config.reconnect_delay
             logger.warning("Kafka lifecycle publisher is unavailable: %s", exc)
+            return None
+        with self.lock:
+            self.producer = producer
+        return producer
 
     def publish(self, event: LifecycleEvent) -> None:
-        if not self.config.enabled:
-            return
-        if self.producer is None:
-            self.start()
-        producer = self.producer
-        if producer is None:
-            logger.warning(
-                "Skipping Kafka lifecycle event %s for job %s while Kafka is unavailable",
-                event.event_type,
-                event.job_id,
-            )
-            return
-        try:
-            future = producer.send(
-                self.config.topic,
-                key=event.job_id,
-                value=asdict(event),
-            )
-        except (KafkaError, OSError) as exc:
-            logger.warning(
-                "Unable to queue Kafka lifecycle event %s for job %s: %s",
-                event.event_type,
-                event.job_id,
-                exc,
-            )
-            with self.lock:
-                if self.producer is producer:
-                    self.producer = None
-                    self.next_start_attempt = (
-                        time.monotonic() + self.config.reconnect_delay
-                    )
-                    producer.close(timeout=0)
-            return
-        future.add_errback(self._log_publish_error, event)
+        self.store.append(event, kafka_published=not self.config.enabled)
+        self.wake_event.set()
 
-    @staticmethod
-    def _log_publish_error(error: Exception, event: LifecycleEvent) -> None:
-        logger.error(
-            "Unable to publish Kafka lifecycle event %s for job %s: %s",
-            event.event_type,
-            event.job_id,
-            error,
-        )
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                delivered = self._deliver_pending()
+            except sqlite3.Error as exc:
+                logger.warning("Kafka outbox database is unavailable: %s", exc)
+                self.stop_event.wait(self.config.reconnect_delay)
+                continue
+            if delivered:
+                self.wake_event.wait(1)
+                self.wake_event.clear()
+            else:
+                self.stop_event.wait(self.config.reconnect_delay)
+
+    def _deliver_pending(self) -> bool:
+        pending = self.store.pending()
+        if not pending:
+            return True
+        producer = self._get_producer()
+        if producer is None:
+            return False
+        for event in pending:
+            if self.stop_event.is_set():
+                return True
+            try:
+                producer.send(
+                    self.config.topic,
+                    key=event.job_id,
+                    value=asdict(event),
+                ).get(timeout=10)
+                self.store.mark_published(event.event_id)
+            except (KafkaError, OSError) as exc:
+                logger.warning(
+                    "Kafka lifecycle event delivery failed for job %s: %s",
+                    event.job_id,
+                    exc,
+                )
+                self._reset_producer(producer)
+                return False
+        return True
+
+    def _reset_producer(self, producer) -> None:
+        with self.lock:
+            if self.producer is producer:
+                self.producer = None
+        try:
+            producer.close(timeout=0)
+        except (KafkaError, OSError):
+            logger.debug("Kafka lifecycle producer was already closed")
 
     def close(self) -> None:
+        self.stop_event.set()
+        self.wake_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=10)
+            if self.thread.is_alive():
+                logger.warning(
+                    "Kafka lifecycle publisher did not stop within 10 seconds"
+                )
         with self.lock:
             producer = self.producer
             self.producer = None
         if producer is not None:
-            producer.flush(timeout=10)
-            producer.close(timeout=10)
+            try:
+                producer.flush(timeout=10)
+                producer.close(timeout=10)
+            except (KafkaError, OSError):
+                logger.warning("Kafka lifecycle publisher close failed", exc_info=True)
 
 
 class KafkaProjectionConsumer:
@@ -341,7 +452,7 @@ class KafkaProjectionConsumer:
             client_id=f"{self.config.client_id}-projection",
             auto_offset_reset="earliest",
             enable_auto_commit=False,
-            request_timeout_ms=5000,
+            request_timeout_ms=15000,
             api_version_auto_timeout_ms=5000,
         )
         try:
@@ -353,7 +464,7 @@ class KafkaProjectionConsumer:
                         try:
                             payload = json.loads(message.value.decode())
                             event = LifecycleEvent.from_dict(payload)
-                            self.store.append(event)
+                            self.store.append(event, kafka_published=True)
                         except (UnicodeDecodeError, ValueError, TypeError):
                             logger.error(
                                 "Ignoring invalid Kafka lifecycle event at %s:%s:%s",
@@ -375,6 +486,7 @@ class KafkaStatus:
     topic_exists: bool = False
     partition_count: int = 0
     consumer_lag: int = 0
+    outbox_pending: int = 0
     error: Optional[str] = None
 
 
@@ -384,16 +496,23 @@ class KafkaStatusProbe:
     def __init__(
         self,
         config: KafkaConfig,
+        store: Optional[LifecycleEventStore] = None,
         admin_factory=KafkaAdminClient,
         consumer_factory=KafkaConsumer,
     ):
         self.config = config
+        self.store = store
         self.admin_factory = admin_factory
         self.consumer_factory = consumer_factory
 
     def snapshot(self) -> KafkaStatus:
+        outbox_pending = self.store.pending_count() if self.store else 0
         if not self.config.enabled:
-            return KafkaStatus(connected=False, error="Kafka is disabled")
+            return KafkaStatus(
+                connected=False,
+                outbox_pending=outbox_pending,
+                error="Kafka is disabled",
+            )
         admin = None
         consumer = None
         try:
@@ -414,7 +533,8 @@ class KafkaStatusProbe:
                     group_id=self.config.consumer_group,
                     client_id=f"{self.config.client_id}-status-lag",
                     enable_auto_commit=False,
-                    request_timeout_ms=3000,
+                    session_timeout_ms=6000,
+                    request_timeout_ms=7000,
                     api_version_auto_timeout_ms=3000,
                 )
                 partitions = consumer.partitions_for_topic(self.config.topic) or set()
@@ -432,10 +552,15 @@ class KafkaStatusProbe:
                 topic_exists=topic_exists,
                 partition_count=len(partitions),
                 consumer_lag=lag,
+                outbox_pending=outbox_pending,
             )
         except (KafkaError, OSError) as exc:
             logger.warning("Kafka status probe failed: %s", exc)
-            return KafkaStatus(connected=False, error="Kafka is unavailable")
+            return KafkaStatus(
+                connected=False,
+                outbox_pending=outbox_pending,
+                error="Kafka is unavailable",
+            )
         finally:
             if consumer is not None:
                 consumer.close()

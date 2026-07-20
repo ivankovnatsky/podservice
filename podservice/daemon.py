@@ -82,6 +82,7 @@ class PodService:
         self.kafka_publisher = KafkaLifecyclePublisher(
             self.config.kafka,
             self.kafka_topic_manager,
+            self.event_store,
         )
         self.kafka_projection = KafkaProjectionConsumer(
             self.config.kafka,
@@ -94,7 +95,7 @@ class PodService:
             lifecycle_handler=self._emit_lifecycle,
         )
         self.rabbitmq_status = RabbitMQStatusProbe(self.config.rabbitmq)
-        self.kafka_status = KafkaStatusProbe(self.config.kafka)
+        self.kafka_status = KafkaStatusProbe(self.config.kafka, self.event_store)
         self.server = PodcastServer(
             self.config,
             self.feed,

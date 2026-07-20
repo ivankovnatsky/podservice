@@ -366,7 +366,7 @@ class PodcastServer:
                     .state {{ width: 11px; height: 11px; border-radius: 50%; display: inline-block; }}
                     .state.up {{ background: #16a34a; box-shadow: 0 0 0 4px #dcfce7; }}
                     .state.down {{ background: #dc2626; box-shadow: 0 0 0 4px #fee2e2; }}
-                    .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
+                    .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 12px; }}
                     .metric strong {{ display: block; font-size: 24px; }}
                     .metric span, .error {{ color: #64748b; font-size: 13px; }}
                     .panel {{ margin-bottom: 24px; overflow-x: auto; }}
@@ -407,6 +407,7 @@ class PodcastServer:
                             <div class="metric"><strong>{kafka.broker_count}</strong><span>Brokers</span></div>
                             <div class="metric"><strong>{kafka.partition_count}</strong><span>Partitions</span></div>
                             <div class="metric"><strong>{kafka.consumer_lag}</strong><span>Consumer lag</span></div>
+                            <div class="metric"><strong>{kafka.outbox_pending}</strong><span>Outbox pending</span></div>
                         </div>
                         <p class="error">{escape(kafka.error or self.config.kafka.topic)}</p>
                     </section>
