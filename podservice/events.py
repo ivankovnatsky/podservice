@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 PARTIAL_UPLOAD_SUFFIX = ".partial"
 
+# A fragment older than this cannot belong to an upload still in flight, so it
+# is safe to discard while the service is running.
+PARTIAL_UPLOAD_STALE_SECONDS = 3600
+
 SOURCE_TYPE_URL = "url"
 SOURCE_TYPE_FILE = "file"
 SOURCE_TYPES = frozenset({SOURCE_TYPE_URL, SOURCE_TYPE_FILE})

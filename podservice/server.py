@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import threading
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ from werkzeug.utils import secure_filename
 
 from .config import ServiceConfig
 from .events import (
+    PARTIAL_UPLOAD_STALE_SECONDS,
     PARTIAL_UPLOAD_SUFFIX,
     DatabaseStatus,
     KafkaStatus,
@@ -372,6 +374,49 @@ class PodcastServer:
 
         @self.app.route("/api/status")
         def api_status():
+            """
+            Report broker, database and recent lifecycle state
+
+            The JSON form of the Data Status page. Fields degrade rather than
+            fail: a broker that cannot be reached reports connected false with
+            an error string, so a 200 does not imply every dependency is up.
+            ---
+            tags:
+              - Status
+            produces:
+              - application/json
+            responses:
+              200:
+                description: Current messaging and storage state
+                schema:
+                  type: object
+                  properties:
+                    rabbitmq:
+                      type: object
+                      description: >
+                        Connection state plus per-queue depth, unacknowledged
+                        count and consumers.
+                    kafka:
+                      type: object
+                      description: >
+                        Connection state, whether the lifecycle topic exists,
+                        broker and partition counts, consumer lag, and the
+                        number of events still awaiting delivery.
+                    database:
+                      type: object
+                      description: >
+                        SQLite health, path, event count, pending outbox rows,
+                        size on disk and the latest event timestamp.
+                    events:
+                      type: array
+                      description: >
+                        Recent lifecycle events, newest first by occurred_at.
+                        Each carries event_id, occurred_at, event_type, job_id,
+                        source, source_type (url or file), batch_id, attempt
+                        and detail.
+                      items:
+                        type: object
+            """
             rabbitmq, kafka, database, events = self._data_status()
             return jsonify(
                 {
@@ -566,6 +611,8 @@ class PodcastServer:
                 audio_dir.mkdir(parents=True, exist_ok=True)
                 metadata_dir.mkdir(parents=True, exist_ok=True)
 
+                self._sweep_stale_partials(audio_dir)
+
                 batch_id = str(uuid4())
                 uploaded_count = 0
                 failed_count = 0
@@ -591,6 +638,7 @@ class PodcastServer:
                     partial_path = None
                     stored_path = None
                     metadata_path = None
+                    reserved_path = None
                     try:
                         file_stem = Path(original_filename).stem
                         file_ext = Path(original_filename).suffix.lower()
@@ -609,21 +657,39 @@ class PodcastServer:
                         if not file_ext:
                             file_ext = ".mp3"
 
-                        # Determine audio file path with collision handling
+                        # Claim the name atomically: testing existence first
+                        # would let two uploads deriving the same title pick
+                        # it, and the loser's audio would be overwritten.
                         audio_path = audio_dir / f"{safe_title}{file_ext}"
                         counter = 1
-                        while audio_path.exists():
-                            audio_path = audio_dir / f"{safe_title}_{counter}{file_ext}"
-                            counter += 1
+                        while True:
+                            try:
+                                handle = os.open(
+                                    audio_path,
+                                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                                    0o644,
+                                )
+                            except FileExistsError:
+                                audio_path = (
+                                    audio_dir / f"{safe_title}_{counter}{file_ext}"
+                                )
+                                counter += 1
+                                continue
+                            os.close(handle)
+                            reserved_path = audio_path
+                            break
 
                         # Stage under .partial so an interrupted write is
                         # identifiable and never mistaken for a real episode.
+                        # The job id keeps concurrent uploads off each other's
+                        # fragment.
                         partial_path = audio_path.with_name(
-                            f"{audio_path.name}{PARTIAL_UPLOAD_SUFFIX}"
+                            f"{audio_path.name}.{job_id}{PARTIAL_UPLOAD_SUFFIX}"
                         )
                         audio_file.save(str(partial_path))
                         partial_path.replace(audio_path)
                         partial_path = None
+                        reserved_path = None
                         stored_path = audio_path
                         logger.info(f"Uploaded audio file: {audio_path.name}")
 
@@ -671,7 +737,12 @@ class PodcastServer:
                         # Roll back so a failed file leaves nothing behind: a
                         # stored audio file without metadata is invisible to the
                         # feed yet still served, and would pile up on retries.
-                        for leftover in (partial_path, metadata_path, stored_path):
+                        for leftover in (
+                            partial_path,
+                            metadata_path,
+                            stored_path,
+                            reserved_path,
+                        ):
                             if leftover is None:
                                 continue
                             try:
@@ -1698,6 +1769,26 @@ class PodcastServer:
     def _valid_csrf_token(self) -> bool:
         token = request.form.get("csrf_token", "")
         return bool(token) and secrets.compare_digest(token, self.csrf_token)
+
+    def _sweep_stale_partials(self, audio_dir: Path) -> None:
+        """Discard fragments left by uploads that never finished.
+
+        Only old ones: a recent .partial may be an upload still writing.
+        """
+        cutoff = time.time() - PARTIAL_UPLOAD_STALE_SECONDS
+        try:
+            partials = list(audio_dir.glob(f"*{PARTIAL_UPLOAD_SUFFIX}"))
+        except OSError as exc:
+            logger.warning("Unable to scan for interrupted uploads: %s", exc)
+            return
+        for partial in partials:
+            try:
+                if partial.stat().st_mtime > cutoff:
+                    continue
+                partial.unlink()
+                logger.info("Removed stale interrupted upload: %s", partial.name)
+            except OSError as exc:
+                logger.warning("Unable to remove %s: %s", partial.name, exc)
 
     def _emit_upload(
         self,

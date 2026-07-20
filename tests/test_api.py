@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -743,6 +744,52 @@ class TestAudioUpload:
         assert response.status_code == 500
         types = [call.kwargs["event_type"] for call in emit.call_args_list]
         assert types == ["upload.received", "upload.failed"]
+
+    def test_stale_partials_are_swept_but_recent_ones_kept(
+        self, test_config, test_feed
+    ):
+        server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
+        audio_dir = Path(test_config.storage.audio_dir)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+
+        stale = audio_dir / "old.mp3.partial"
+        stale.write_bytes(b"fragment")
+        os.utime(stale, (0, 0))
+        # A recent fragment may be an upload still writing, so it must survive.
+        active = audio_dir / "current.mp3.partial"
+        active.write_bytes(b"fragment")
+
+        self._upload(server, [(io.BytesIO(b"audio"), "trigger.mp3")])
+
+        assert not stale.exists()
+        assert active.exists()
+
+    def test_target_name_is_claimed_before_the_write_begins(
+        self, test_config, test_feed
+    ):
+        server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
+        audio_dir = Path(test_config.storage.audio_dir)
+        observed = {}
+
+        real_save = FileStorage.save
+
+        def record(self, dst, *args, **kwargs):
+            # A concurrent upload deriving the same title must already see the
+            # target taken, otherwise both would write to it.
+            partial = Path(dst)
+            target = partial.parent / partial.name.split(".mp3")[0]
+            observed["target_taken"] = (audio_dir / f"{target.name}.mp3").exists()
+            observed["partial"] = partial.name
+            return real_save(self, dst, *args, **kwargs)
+
+        with patch.object(FileStorage, "save", record):
+            self._upload(server, [(io.BytesIO(b"audio"), "claimed.mp3")])
+
+        assert observed["target_taken"] is True
+        # The fragment is job-scoped, so two uploads cannot share one.
+        assert observed["partial"].startswith("claimed.mp3.")
+        assert observed["partial"].endswith(".partial")
+        assert observed["partial"] != "claimed.mp3.partial"
 
     def test_partial_batch_redirect_is_url_encoded(self, test_config, test_feed):
         server = PodcastServer(test_config, test_feed, emit_upload_event=Mock())
