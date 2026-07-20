@@ -9,7 +9,7 @@ them through a podcast feed compatible with Apple Podcasts and other players.
 - Durable RabbitMQ-backed download jobs with confirmed publishing
 - Delayed retries and a dead-letter queue for failed downloads
 - Kafka download lifecycle events with a persistent dashboard projection
-- RabbitMQ and Kafka status dashboard at `/status`
+- RabbitMQ, Kafka, and SQLite data-status dashboard at `/status`
 - Audio extraction through yt-dlp and ffmpeg
 - RSS 2.0 feed with iTunes extensions
 - Direct audio upload and episode management
@@ -68,8 +68,9 @@ curl -X POST http://localhost:8083/api/episodes \
 
 Other endpoints:
 
-- `GET /status` — RabbitMQ queues, Kafka health and lag, and recent events
-- `GET /api/status` — JSON form of the messaging status
+- `GET /status` — RabbitMQ queues, Kafka health and lag, SQLite, and recent
+  events
+- `GET /api/status` — JSON form of the data status
 - `GET /feed.xml` — podcast feed
 - `GET /audio/<filename>` — audio files
 - `GET /thumbnails/<filename>` — thumbnails

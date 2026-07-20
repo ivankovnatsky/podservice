@@ -51,6 +51,12 @@ def test_event_store_projects_events_idempotently(tmp_path):
 
     assert store.pending() == []
     assert store.pending_count() == 0
+    status = store.status()
+    assert status.connected is True
+    assert status.event_count == 1
+    assert status.outbox_pending == 0
+    assert status.size_bytes > 0
+    assert status.last_event_at == event.occurred_at
 
 
 def test_event_store_migrates_existing_projection_as_published(tmp_path):

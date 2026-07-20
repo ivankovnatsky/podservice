@@ -24,7 +24,7 @@ from markupsafe import escape
 from werkzeug.utils import secure_filename
 
 from .config import ServiceConfig
-from .events import KafkaStatus, LifecycleEvent
+from .events import DatabaseStatus, KafkaStatus, LifecycleEvent
 from .feed import Episode, PodcastFeed, save_episode_metadata
 from .messaging import DownloadJob, MessagePublishError, PartialPublishError
 from .status import RabbitMQStatus
@@ -75,6 +75,7 @@ class PodcastServer:
         submit_urls: Optional[Callable[[list[str]], list[DownloadJob]]] = None,
         rabbitmq_status: Optional[Callable[[], RabbitMQStatus]] = None,
         kafka_status: Optional[Callable[[], KafkaStatus]] = None,
+        database_status: Optional[Callable[[], DatabaseStatus]] = None,
         recent_events: Optional[Callable[[int], list[LifecycleEvent]]] = None,
     ):
         self.config = config
@@ -82,6 +83,7 @@ class PodcastServer:
         self.submit_urls = submit_urls
         self.rabbitmq_status = rabbitmq_status
         self.kafka_status = kafka_status
+        self.database_status = database_status
         self.recent_events = recent_events
         self.csrf_token = secrets.token_urlsafe(32)
         self.app = Flask(__name__)
@@ -173,7 +175,7 @@ class PodcastServer:
                     <ul>
                         <li><a href="/feed.xml">📡 Podcast Feed</a></li>
                         <li><a href="/episodes">🎵 Episodes</a></li>
-                        <li><a href="/status">📊 Messaging Status</a></li>
+                        <li><a href="/status">📊 Data Status</a></li>
                         <li><a href="/apidocs/">📚 API Docs</a></li>
                     </ul>
 
@@ -298,7 +300,7 @@ class PodcastServer:
 
         @self.app.route("/api/status")
         def api_status():
-            rabbitmq, kafka, events = self._messaging_status()
+            rabbitmq, kafka, database, events = self._data_status()
             return jsonify(
                 {
                     "rabbitmq": {
@@ -308,15 +310,17 @@ class PodcastServer:
                         "consumers": rabbitmq.consumers,
                     },
                     "kafka": asdict(kafka),
+                    "database": asdict(database),
                     "events": [asdict(event) for event in events],
                 }
             )
 
         @self.app.route("/status")
-        def messaging_status():
-            rabbitmq, kafka, events = self._messaging_status()
+        def data_status():
+            rabbitmq, kafka, database, events = self._data_status()
             rabbit_state = "up" if rabbitmq.connected else "down"
             kafka_state = "up" if kafka.connected else "down"
+            database_state = "up" if database.connected else "down"
             queue_rows = "".join(
                 f"""
                 <tr>
@@ -349,7 +353,7 @@ class PodcastServer:
             <!doctype html>
             <html>
             <head>
-                <title>Messaging Status · Podservice</title>
+                <title>Data Status · Podservice</title>
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <meta http-equiv="refresh" content="15">
                 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -388,7 +392,7 @@ class PodcastServer:
             </head>
             <body>
                 <div class="header">
-                    <div><h1>Messaging Status</h1><p>Refreshes every 15 seconds</p></div>
+                    <div><h1>Data Status</h1><p>Refreshes every 15 seconds</p></div>
                     <a href="/">← Podservice</a>
                 </div>
                 <div class="cards">
@@ -410,6 +414,16 @@ class PodcastServer:
                             <div class="metric"><strong>{kafka.outbox_pending}</strong><span>Outbox pending</span></div>
                         </div>
                         <p class="error">{escape(kafka.error or self.config.kafka.topic)}</p>
+                    </section>
+                    <section class="card">
+                        <h2><span class="state {database_state}"></span>SQLite</h2>
+                        <div class="metrics">
+                            <div class="metric"><strong>{database.event_count}</strong><span>Events</span></div>
+                            <div class="metric"><strong>{database.outbox_pending}</strong><span>Pending</span></div>
+                            <div class="metric"><strong>{self._format_bytes(database.size_bytes)}</strong><span>Storage</span></div>
+                        </div>
+                        <p class="error">{escape(database.error or database.path)}</p>
+                        <p class="error">Latest event: {escape(database.last_event_at or "none")}</p>
                     </section>
                 </div>
                 <section class="panel">
@@ -1391,9 +1405,14 @@ class PodcastServer:
                 logger.error(f"Error creating episode via API: {e}", exc_info=True)
                 return jsonify({"success": False, "error": str(e)}), 500
 
-    def _messaging_status(
+    def _data_status(
         self,
-    ) -> tuple[RabbitMQStatus, KafkaStatus, list[LifecycleEvent]]:
+    ) -> tuple[
+        RabbitMQStatus,
+        KafkaStatus,
+        DatabaseStatus,
+        list[LifecycleEvent],
+    ]:
         try:
             rabbitmq = (
                 self.rabbitmq_status()
@@ -1413,11 +1432,37 @@ class PodcastServer:
             logger.exception("Kafka status callback failed")
             kafka = KafkaStatus(False, error="Kafka status is unavailable")
         try:
+            database = (
+                self.database_status()
+                if self.database_status is not None
+                else DatabaseStatus(
+                    False,
+                    path="",
+                    error="SQLite status is unavailable",
+                )
+            )
+        except Exception:
+            logger.exception("SQLite status callback failed")
+            database = DatabaseStatus(
+                False,
+                path="",
+                error="SQLite status is unavailable",
+            )
+        try:
             events = self.recent_events(50) if self.recent_events is not None else []
         except Exception:
             logger.exception("Lifecycle event projection query failed")
             events = []
-        return rabbitmq, kafka, events
+        return rabbitmq, kafka, database, events
+
+    @staticmethod
+    def _format_bytes(size_bytes: int) -> str:
+        size = float(size_bytes)
+        for unit in ("B", "KiB", "MiB", "GiB"):
+            if size < 1024 or unit == "GiB":
+                return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+            size /= 1024
+        return f"{size_bytes} B"
 
     def _valid_csrf_token(self) -> bool:
         token = request.form.get("csrf_token", "")

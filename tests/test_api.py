@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from podservice.config import PodcastConfig, ServerConfig, ServiceConfig, StorageConfig
-from podservice.events import KafkaStatus, LifecycleEvent
+from podservice.events import DatabaseStatus, KafkaStatus, LifecycleEvent
 from podservice.feed import PodcastFeed
 from podservice.messaging import DownloadJob, MessagePublishError, PartialPublishError
 from podservice.server import PodcastServer
@@ -521,6 +521,16 @@ class TestMessagingStatus:
             test_feed,
             rabbitmq_status=Mock(return_value=rabbitmq),
             kafka_status=Mock(return_value=kafka),
+            database_status=Mock(
+                return_value=DatabaseStatus(
+                    connected=True,
+                    path="/data/db/podservice.sqlite3",
+                    size_bytes=4096,
+                    event_count=1,
+                    outbox_pending=0,
+                    last_event_at=event.occurred_at,
+                )
+            ),
             recent_events=Mock(return_value=[event]),
         )
         server.app.config["TESTING"] = True
@@ -530,11 +540,14 @@ class TestMessagingStatus:
             api = status_client.get("/api/status")
 
         assert dashboard.status_code == 200
+        assert b"Data Status" in dashboard.data
+        assert b"SQLite" in dashboard.data
         assert b"RabbitMQ queues" in dashboard.data
         assert b"Recent Kafka lifecycle events" in dashboard.data
         assert b"https://example.com/episode?a=1&amp;b=2" in dashboard.data
         assert api.json["rabbitmq"]["ready"] == 2
         assert api.json["kafka"]["consumer_lag"] == 3
+        assert api.json["database"]["event_count"] == 1
         assert api.json["events"][0]["event_id"] == "event-1"
 
     def test_headphones_favicon(self, client):

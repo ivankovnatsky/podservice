@@ -79,6 +79,17 @@ class LifecycleEvent:
         return event
 
 
+@dataclass(frozen=True)
+class DatabaseStatus:
+    connected: bool
+    path: str
+    size_bytes: int = 0
+    event_count: int = 0
+    outbox_pending: int = 0
+    last_event_at: Optional[str] = None
+    error: Optional[str] = None
+
+
 class LifecycleEventStore:
     """Idempotent SQLite projection of Kafka lifecycle events."""
 
@@ -206,6 +217,43 @@ class LifecycleEventStore:
                 """
             ).fetchone()
         return int(row["count"])
+
+    def status(self) -> DatabaseStatus:
+        try:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS event_count,
+                        SUM(CASE WHEN kafka_published_at IS NULL THEN 1 ELSE 0 END)
+                            AS outbox_pending,
+                        MAX(occurred_at) AS last_event_at
+                    FROM lifecycle_events
+                    """
+                ).fetchone()
+            related_files = [
+                self.path,
+                Path(f"{self.path}-wal"),
+                Path(f"{self.path}-shm"),
+            ]
+            size_bytes = sum(
+                path.stat().st_size for path in related_files if path.exists()
+            )
+            return DatabaseStatus(
+                connected=True,
+                path=str(self.path),
+                size_bytes=size_bytes,
+                event_count=int(row["event_count"]),
+                outbox_pending=int(row["outbox_pending"] or 0),
+                last_event_at=row["last_event_at"],
+            )
+        except (OSError, sqlite3.Error) as exc:
+            logger.warning("SQLite status probe failed: %s", exc)
+            return DatabaseStatus(
+                connected=False,
+                path=str(self.path),
+                error="SQLite database is unavailable",
+            )
 
     def recent(self, limit: int = 50) -> list[LifecycleEvent]:
         safe_limit = max(1, min(limit, 200))

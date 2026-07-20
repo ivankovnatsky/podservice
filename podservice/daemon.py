@@ -102,6 +102,7 @@ class PodService:
             submit_urls=self.submit_urls,
             rabbitmq_status=self.rabbitmq_status.snapshot,
             kafka_status=self.kafka_status.snapshot,
+            database_status=self.event_store.status,
             recent_events=self.event_store.recent,
         )
 

@@ -106,7 +106,7 @@ Endpoints:
 - Web interface: `http://192.168.50.4:8083/`
 - Audio: `http://192.168.50.4:8083/audio`
 - API documentation: `http://192.168.50.4:8083/apidocs/`
-- Messaging status: `http://192.168.50.4:8083/status`
+- Data status: `http://192.168.50.4:8083/status`
 
 ## Service management
 
