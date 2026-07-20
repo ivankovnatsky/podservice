@@ -279,10 +279,14 @@ class RabbitMQConsumer:
         self,
         config: RabbitMQConfig,
         handler: Callable[[DownloadJob], bool],
+        lifecycle_handler: Optional[
+            Callable[[str, DownloadJob, Optional[str]], None]
+        ] = None,
         connection_factory=None,
     ):
         self.config = config
         self.handler = handler
+        self.lifecycle_handler = lifecycle_handler
         self.topology = RabbitMQTopology(config)
         self.connection_factory = connection_factory or pika.BlockingConnection
         self.stop_event = threading.Event()
@@ -391,11 +395,16 @@ class RabbitMQConsumer:
         return self.worker_thread
 
     def _process_job(self, connection, channel, delivery_tag: int, job: DownloadJob):
+        self._emit_lifecycle("download.started", job)
         try:
             succeeded = self.handler(job)
         except Exception:
             logger.exception("Download job %s raised an exception", job.job_id)
             succeeded = False
+        self._emit_lifecycle(
+            "download.succeeded" if succeeded else "download.failed",
+            job,
+        )
 
         try:
             connection.add_callback_threadsafe(
@@ -426,6 +435,11 @@ class RabbitMQConsumer:
         )
         if next_attempt <= len(self.config.retry_delays):
             self._publish_retry(channel, failed_job)
+            self._emit_lifecycle(
+                "download.retry_scheduled",
+                failed_job,
+                f"{self.config.retry_delays[next_attempt - 1]}s",
+            )
             logger.warning(
                 "Scheduled retry %s for download job %s",
                 next_attempt,
@@ -433,9 +447,27 @@ class RabbitMQConsumer:
             )
         else:
             self._publish_dead(channel, failed_job)
+            self._emit_lifecycle("download.dead_lettered", failed_job)
             logger.error("Dead-lettered download job %s", job.job_id)
 
         channel.basic_ack(delivery_tag=delivery_tag)
+
+    def _emit_lifecycle(
+        self,
+        event_type: str,
+        job: DownloadJob,
+        detail: Optional[str] = None,
+    ) -> None:
+        if self.lifecycle_handler is None:
+            return
+        try:
+            self.lifecycle_handler(event_type, job, detail)
+        except Exception:
+            logger.exception(
+                "Unable to emit lifecycle event %s for job %s",
+                event_type,
+                job.job_id,
+            )
 
     def _publish_retry(self, channel, job: DownloadJob) -> None:
         channel.basic_publish(

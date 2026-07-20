@@ -39,6 +39,7 @@ rabbitmq:
   # RabbitMQ connection and durable download-job routing
   host: "127.0.0.1"
   port: 5672
+  management_port: 15672
   username: "guest"
   password_file: null
   virtual_host: "/"
@@ -48,6 +49,17 @@ rabbitmq:
 
   # Delay failed downloads for 30 seconds, 5 minutes, then 30 minutes
   retry_delays: [30, 300, 1800]
+  reconnect_delay: 5
+
+kafka:
+  # Publish download lifecycle events and project them into the status dashboard
+  enabled: false
+  bootstrap_servers: ["127.0.0.1:9092"]
+  topic: "podservice.lifecycle"
+  consumer_group: "podservice-dashboard"
+  client_id: "podservice"
+  topic_partitions: 1
+  topic_replication_factor: 1
   reconnect_delay: 5
 
 # Logging level: DEBUG, INFO, WARNING, ERROR

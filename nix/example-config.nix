@@ -33,12 +33,20 @@
     rabbitmq = {
       host = "127.0.0.1";
       port = 5672;
+      managementPort = 15672;
       username = "guest";
       retryDelays = [
         30
         300
         1800
       ];
+    };
+
+    kafka = {
+      enable = true;
+      bootstrapServers = [ "127.0.0.1:9092" ];
+      topic = "podservice.lifecycle";
+      consumerGroup = "podservice-dashboard";
     };
 
     # Logging

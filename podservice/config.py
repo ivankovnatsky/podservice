@@ -68,6 +68,7 @@ class RabbitMQConfig:
 
     host: str = "127.0.0.1"
     port: int = 5672
+    management_port: int = 15672
     username: str = "guest"
     password_file: Optional[str] = None
     virtual_host: str = "/"
@@ -92,6 +93,31 @@ class RabbitMQConfig:
 
 
 @dataclass
+class KafkaConfig:
+    """Kafka lifecycle event configuration."""
+
+    enabled: bool = False
+    bootstrap_servers: tuple[str, ...] = ("127.0.0.1:9092",)
+    topic: str = "podservice.lifecycle"
+    consumer_group: str = "podservice-dashboard"
+    client_id: str = "podservice"
+    topic_partitions: int = 1
+    topic_replication_factor: int = 1
+    reconnect_delay: int = 5
+
+    def __post_init__(self):
+        self.bootstrap_servers = tuple(self.bootstrap_servers)
+        if not self.bootstrap_servers:
+            raise ValueError("kafka.bootstrap_servers must not be empty")
+        if self.topic_partitions <= 0:
+            raise ValueError("kafka.topic_partitions must be positive")
+        if self.topic_replication_factor <= 0:
+            raise ValueError("kafka.topic_replication_factor must be positive")
+        if self.reconnect_delay <= 0:
+            raise ValueError("kafka.reconnect_delay must be positive")
+
+
+@dataclass
 class ServiceConfig:
     """Main service configuration."""
 
@@ -99,6 +125,8 @@ class ServiceConfig:
     podcast: PodcastConfig = field(default_factory=PodcastConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     rabbitmq: RabbitMQConfig = field(default_factory=RabbitMQConfig)
+    kafka: KafkaConfig = field(default_factory=KafkaConfig)
+    legacy_urls_file: Optional[str] = None
     log_level: str = "INFO"
 
 
@@ -148,12 +176,24 @@ def load_config(config_path: Optional[str] = None) -> ServiceConfig:
             )
         rabbitmq = RabbitMQConfig(**rabbitmq_data)
 
+        kafka_data = data.get("kafka", {})
+        kafka = KafkaConfig(**kafka_data)
+
+        watch_data = data.get("watch", {})
+        legacy_urls_file = None
+        if watch_data.get("enabled", True) and isinstance(watch_data.get("file"), str):
+            legacy_urls_file = os.path.abspath(
+                os.path.expandvars(os.path.expanduser(watch_data["file"]))
+            )
+
         # Create main config
         config = ServiceConfig(
             server=server,
             podcast=podcast,
             storage=storage,
             rabbitmq=rabbitmq,
+            kafka=kafka,
+            legacy_urls_file=legacy_urls_file,
             log_level=data.get("log_level", "INFO"),
         )
 
@@ -197,6 +237,7 @@ def save_config(config: ServiceConfig, config_path: Optional[str] = None) -> Non
         "rabbitmq": {
             "host": config.rabbitmq.host,
             "port": config.rabbitmq.port,
+            "management_port": config.rabbitmq.management_port,
             "username": config.rabbitmq.username,
             "password_file": config.rabbitmq.password_file,
             "virtual_host": config.rabbitmq.virtual_host,
@@ -205,6 +246,16 @@ def save_config(config: ServiceConfig, config_path: Optional[str] = None) -> Non
             "routing_key": config.rabbitmq.routing_key,
             "retry_delays": list(config.rabbitmq.retry_delays),
             "reconnect_delay": config.rabbitmq.reconnect_delay,
+        },
+        "kafka": {
+            "enabled": config.kafka.enabled,
+            "bootstrap_servers": list(config.kafka.bootstrap_servers),
+            "topic": config.kafka.topic,
+            "consumer_group": config.kafka.consumer_group,
+            "client_id": config.kafka.client_id,
+            "topic_partitions": config.kafka.topic_partitions,
+            "topic_replication_factor": config.kafka.topic_replication_factor,
+            "reconnect_delay": config.kafka.reconnect_delay,
         },
         "log_level": config.log_level,
     }

@@ -9,9 +9,11 @@ from unittest.mock import Mock, patch
 import pytest
 
 from podservice.config import PodcastConfig, ServerConfig, ServiceConfig, StorageConfig
+from podservice.events import KafkaStatus, LifecycleEvent
 from podservice.feed import PodcastFeed
 from podservice.messaging import DownloadJob, MessagePublishError, PartialPublishError
 from podservice.server import PodcastServer
+from podservice.status import RabbitMQQueueStatus, RabbitMQStatus
 
 
 @pytest.fixture
@@ -481,6 +483,66 @@ class TestHtmlEscaping:
 
         assert response.status_code == 302
         assert not audio_file.exists()
+
+
+class TestMessagingStatus:
+    def test_dashboard_and_json_report_broker_state(self, test_config, test_feed):
+        rabbitmq = RabbitMQStatus(
+            connected=True,
+            version="4.2.5",
+            queues=(
+                RabbitMQQueueStatus(
+                    name="podservice.downloads",
+                    role="Downloads",
+                    ready=2,
+                    unacknowledged=1,
+                    consumers=1,
+                    state="running",
+                ),
+            ),
+        )
+        kafka = KafkaStatus(
+            connected=True,
+            broker_count=1,
+            topic_exists=True,
+            partition_count=1,
+            consumer_lag=3,
+        )
+        event = LifecycleEvent(
+            event_id="event-1",
+            event_type="download.succeeded",
+            occurred_at="2026-07-20T12:00:00+00:00",
+            job_id="job-1",
+            url="https://example.com/episode?a=1&b=2",
+            attempt=0,
+        )
+        server = PodcastServer(
+            test_config,
+            test_feed,
+            rabbitmq_status=Mock(return_value=rabbitmq),
+            kafka_status=Mock(return_value=kafka),
+            recent_events=Mock(return_value=[event]),
+        )
+        server.app.config["TESTING"] = True
+
+        with server.app.test_client() as status_client:
+            dashboard = status_client.get("/status")
+            api = status_client.get("/api/status")
+
+        assert dashboard.status_code == 200
+        assert b"RabbitMQ queues" in dashboard.data
+        assert b"Recent Kafka lifecycle events" in dashboard.data
+        assert b"https://example.com/episode?a=1&amp;b=2" in dashboard.data
+        assert api.json["rabbitmq"]["ready"] == 2
+        assert api.json["kafka"]["consumer_lag"] == 3
+        assert api.json["events"][0]["event_id"] == "event-1"
+
+    def test_headphones_favicon(self, client):
+        response = client.get("/favicon.svg")
+
+        assert response.status_code == 200
+        assert response.mimetype == "image/svg+xml"
+        assert b'<path d="M14 35v-5' in response.data
 
 
 class TestUtilsFunctions:

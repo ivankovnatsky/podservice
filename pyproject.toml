@@ -13,6 +13,7 @@ dependencies = [
     "flask",
     "flasgger",
     "pika",
+    "kafka-python-ng",
     "yt-dlp",
     "PyYAML",
     "requests",
@@ -44,6 +45,7 @@ python = ">=3.9"
 flask = "*"
 flasgger = "*"
 pika = "*"
+kafka-python-ng = "*"
 yt-dlp = "*"
 PyYAML = "*"
 requests = "*"

@@ -5,13 +5,29 @@ import signal
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from .config import ServiceConfig, load_config
 from .downloader import MediaDownloader
 from .episodes import EpisodeService
+from .events import (
+    KafkaLifecyclePublisher,
+    KafkaProjectionConsumer,
+    KafkaStatusProbe,
+    KafkaTopicManager,
+    LifecycleEvent,
+    LifecycleEventStore,
+)
 from .feed import PodcastFeed
-from .messaging import RabbitMQConsumer, RabbitMQPublisher
+from .messaging import (
+    DownloadJob,
+    MessagePublishError,
+    PartialPublishError,
+    RabbitMQConsumer,
+    RabbitMQPublisher,
+)
 from .server import PodcastServer
+from .status import RabbitMQStatusProbe
 
 logger = logging.getLogger(__name__)
 
@@ -59,14 +75,33 @@ class PodService:
 
         self.episode_service = EpisodeService(self.downloader, self.feed)
         self.publisher = RabbitMQPublisher(self.config.rabbitmq)
+        self.event_store = LifecycleEventStore(
+            Path(self.config.storage.data_dir) / "db" / "podservice.sqlite3"
+        )
+        self.kafka_topic_manager = KafkaTopicManager(self.config.kafka)
+        self.kafka_publisher = KafkaLifecyclePublisher(
+            self.config.kafka,
+            self.kafka_topic_manager,
+        )
+        self.kafka_projection = KafkaProjectionConsumer(
+            self.config.kafka,
+            self.kafka_topic_manager,
+            self.event_store,
+        )
         self.consumer = RabbitMQConsumer(
             self.config.rabbitmq,
             self.episode_service.process_download,
+            lifecycle_handler=self._emit_lifecycle,
         )
+        self.rabbitmq_status = RabbitMQStatusProbe(self.config.rabbitmq)
+        self.kafka_status = KafkaStatusProbe(self.config.kafka)
         self.server = PodcastServer(
             self.config,
             self.feed,
-            submit_urls=self.publisher.publish_urls,
+            submit_urls=self.submit_urls,
+            rabbitmq_status=self.rabbitmq_status.snapshot,
+            kafka_status=self.kafka_status.snapshot,
+            recent_events=self.event_store.recent,
         )
 
         # Set up signal handlers
@@ -96,6 +131,9 @@ class PodService:
         self.running = True
 
         try:
+            self.kafka_publisher.start()
+            self.kafka_projection.start()
+            self._migrate_legacy_urls()
             self.consumer.start()
             self.server.start()
             logger.info("Service running")
@@ -117,11 +155,83 @@ class PodService:
         """Cleanup resources."""
         logger.info("Cleaning up...")
 
-        self.consumer.stop()
-        self.publisher.close()
         self.server.stop()
+        self.publisher.close()
+        self.consumer.stop()
+        self.kafka_projection.stop()
+        self.kafka_publisher.close()
 
         logger.info("Pod Service stopped")
+
+    def submit_urls(self, urls: list[str]) -> list[DownloadJob]:
+        try:
+            jobs = self.publisher.publish_urls(urls)
+        except PartialPublishError as exc:
+            for job in exc.accepted_jobs:
+                self._emit_lifecycle("download.requested", job)
+            raise
+        for job in jobs:
+            self._emit_lifecycle("download.requested", job)
+        return jobs
+
+    def _emit_lifecycle(
+        self,
+        event_type: str,
+        job: DownloadJob,
+        detail: Optional[str] = None,
+    ) -> None:
+        try:
+            self.kafka_publisher.publish(
+                LifecycleEvent.create(
+                    event_type=event_type,
+                    job_id=job.job_id,
+                    url=job.url,
+                    attempt=job.attempt,
+                    detail=detail,
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Unable to emit Kafka lifecycle event %s for job %s",
+                event_type,
+                job.job_id,
+            )
+
+    def _migrate_legacy_urls(self) -> None:
+        if not self.config.legacy_urls_file:
+            return
+        path = Path(self.config.legacy_urls_file)
+        if not path.exists():
+            return
+        pending = [
+            line.strip() for line in path.read_text().splitlines() if line.strip()
+        ]
+        valid = [
+            url
+            for url in pending
+            if url.startswith("http://") or url.startswith("https://")
+        ]
+        invalid = [url for url in pending if url not in valid]
+        if not valid:
+            return
+        try:
+            migrated = len(self.submit_urls(valid))
+            remaining = invalid
+        except PartialPublishError as exc:
+            migrated = len(exc.accepted_jobs)
+            remaining = invalid + [job.url for job in exc.unaccepted_jobs]
+        except MessagePublishError:
+            logger.warning(
+                "Legacy URL migration deferred because RabbitMQ is unavailable"
+            )
+            return
+        temporary = path.with_name(f".{path.name}.migrating")
+        temporary.write_text("".join(f"{url}\n" for url in remaining))
+        temporary.replace(path)
+        logger.info(
+            "Migrated %s legacy URL(s) into RabbitMQ",
+            migrated,
+        )
 
 
 def run_service(config_path: str = None, foreground: bool = True):

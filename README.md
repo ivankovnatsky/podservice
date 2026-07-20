@@ -8,6 +8,8 @@ them through a podcast feed compatible with Apple Podcasts and other players.
 - Flask web interface and REST API
 - Durable RabbitMQ-backed download jobs with confirmed publishing
 - Delayed retries and a dead-letter queue for failed downloads
+- Kafka download lifecycle events with a persistent dashboard projection
+- RabbitMQ and Kafka status dashboard at `/status`
 - Audio extraction through yt-dlp and ffmpeg
 - RSS 2.0 feed with iTunes extensions
 - Direct audio upload and episode management
@@ -18,6 +20,7 @@ them through a podcast feed compatible with Apple Podcasts and other players.
 
 - Python 3.9 or newer
 - RabbitMQ
+- Kafka when lifecycle events are enabled
 - ffmpeg
 - yt-dlp
 
@@ -65,6 +68,8 @@ curl -X POST http://localhost:8083/api/episodes \
 
 Other endpoints:
 
+- `GET /status` — RabbitMQ queues, Kafka health and lag, and recent events
+- `GET /api/status` — JSON form of the messaging status
 - `GET /feed.xml` — podcast feed
 - `GET /audio/<filename>` — audio files
 - `GET /thumbnails/<filename>` — thumbnails
@@ -94,6 +99,7 @@ storage:
 rabbitmq:
   host: "127.0.0.1"
   port: 5672
+  management_port: 15672
   username: "guest"
   password_file: null
   virtual_host: "/"
@@ -101,6 +107,16 @@ rabbitmq:
   queue: "podservice.downloads"
   routing_key: "download.requested"
   retry_delays: [30, 300, 1800]
+  reconnect_delay: 5
+
+kafka:
+  enabled: false
+  bootstrap_servers: ["127.0.0.1:9092"]
+  topic: "podservice.lifecycle"
+  consumer_group: "podservice-dashboard"
+  client_id: "podservice"
+  topic_partitions: 1
+  topic_replication_factor: 1
   reconnect_delay: 5
 
 log_level: "INFO"
@@ -114,6 +130,10 @@ log_level: "INFO"
 4. The episode is added to the in-memory feed and the message is acknowledged.
 5. Failed jobs wait 30 seconds, 5 minutes, and 30 minutes between attempts, then
    move to `podservice.downloads.dead`.
+6. When Kafka is enabled, requested, started, succeeded, failed, retry, and
+   dead-letter lifecycle events are published to `podservice.lifecycle`.
+7. A consumer projects events into `db/podservice.sqlite3` for the status
+   dashboard; Kafka remains the replayable source of the event history.
 
 Messages are persistent and publisher confirms are required before the API
 reports acceptance. Consumers use manual acknowledgements so an interrupted
@@ -145,9 +165,11 @@ podservice/
 ├── daemon.py       # Process lifecycle
 ├── downloader.py   # yt-dlp integration
 ├── episodes.py     # Download/feed coordination
+├── events.py       # Kafka lifecycle events and SQLite projection
 ├── feed.py         # RSS feed and episode model
 ├── messaging.py    # RabbitMQ jobs, topology, publisher, and consumer
 ├── server.py       # Flask web interface and API
+├── status.py       # Read-only RabbitMQ status probe
 └── utils.py        # Shared utilities
 ```
 
@@ -181,7 +203,8 @@ and service-management examples.
 
 ## Troubleshooting
 
-- Check the podservice and RabbitMQ logs when jobs are not being processed.
+- Check the `/status` dashboard and podservice, RabbitMQ, and Kafka logs when
+  jobs or lifecycle events are not being processed.
 - Inspect `podservice.downloads.dead` for jobs that exhausted their retries.
 - Check the `audio/` and `metadata/` directories when the feed is missing an
   episode.

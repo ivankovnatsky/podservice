@@ -26,6 +26,7 @@
             flask
             flasgger
             pika
+            kafka-python-ng
             yt-dlp
             pyyaml
             requests

@@ -1,8 +1,9 @@
 # Deployment Guide
 
 Podservice requires RabbitMQ, ffmpeg, persistent storage, and access to the
-submitted media sources. Keep RabbitMQ on the private network unless its
-authentication and TLS are configured for remote access.
+submitted media sources. Kafka is required when lifecycle events are enabled.
+Keep both brokers on the private network unless authentication and TLS are
+configured for remote access.
 
 ## Flake integration
 
@@ -44,17 +45,25 @@ Import the module into a NixOS configuration:
     rabbitmq = {
       host = "127.0.0.1";
       port = 5672;
+      managementPort = 15672;
       username = "guest";
       virtualHost = "/";
       retryDelays = [ 30 300 1800 ];
+    };
+
+    kafka = {
+      enable = true;
+      bootstrapServers = [ "127.0.0.1:9092" ];
+      topic = "podservice.lifecycle";
+      consumerGroup = "podservice-dashboard";
     };
   };
 }
 ```
 
-The module configures podservice itself. RabbitMQ must also be enabled on the
-host or supplied by another machine. When both run under systemd, order
-podservice after `rabbitmq.service` in the machine configuration.
+The module configures podservice itself. RabbitMQ and, when enabled, Kafka must
+also run on the host or be supplied by another machine. Order podservice after
+their systemd units when they are managed on the same host.
 
 For nix-darwin, import `darwinModules.default` and use macOS storage paths:
 
@@ -97,12 +106,13 @@ Endpoints:
 - Web interface: `http://192.168.50.4:8083/`
 - Audio: `http://192.168.50.4:8083/audio`
 - API documentation: `http://192.168.50.4:8083/apidocs/`
+- Messaging status: `http://192.168.50.4:8083/status`
 
 ## Service management
 
 ```bash
-systemctl status podservice rabbitmq
-journalctl -u podservice -u rabbitmq -f
+systemctl status podservice rabbitmq apache-kafka
+journalctl -u podservice -u rabbitmq -u apache-kafka -f
 ```
 
 On nix-darwin:
@@ -117,12 +127,15 @@ tail -f /Volumes/Storage/Data/.podservice/podservice.out.log
 ```text
 /var/lib/podservice/
 ├── audio/       # Downloaded audio
+├── db/          # Local database files
+│   └── podservice.sqlite3
 ├── metadata/    # Episode metadata
 └── thumbnails/  # Episode artwork
 ```
 
-RabbitMQ stores queued jobs separately in its own data directory. Include both
-the podservice and RabbitMQ data in the host's backup policy.
+RabbitMQ stores queued jobs separately in its own data directory, while Kafka
+stores the lifecycle event log in its broker data directory. Include all three
+stores in the host's backup policy.
 
 On Darwin, the equivalent podservice layout is rooted at
 `/Volumes/Storage/Data/.podservice`.
@@ -130,6 +143,8 @@ On Darwin, the equivalent podservice layout is rooted at
 ## Troubleshooting
 
 - A `503` response from `/api/urls` means RabbitMQ did not confirm the job.
+- Use `/status` to check RabbitMQ consumers, queued jobs, Kafka partitions, and
+  projection lag.
 - Check the podservice logs for consumer reconnects and download errors.
 - Inspect `podservice.downloads.dead` for jobs that exhausted all retries.
 - Verify the configured base URL is reachable from the podcast player.

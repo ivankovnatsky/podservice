@@ -34,6 +34,7 @@ let
       rabbitmq = {
         host = cfg.rabbitmq.host;
         port = cfg.rabbitmq.port;
+        management_port = cfg.rabbitmq.managementPort;
         username = cfg.rabbitmq.username;
         password_file = cfg.rabbitmq.passwordFile;
         virtual_host = cfg.rabbitmq.virtualHost;
@@ -42,6 +43,16 @@ let
         routing_key = cfg.rabbitmq.routingKey;
         retry_delays = cfg.rabbitmq.retryDelays;
         reconnect_delay = cfg.rabbitmq.reconnectDelay;
+      };
+      kafka = {
+        enabled = cfg.kafka.enable;
+        bootstrap_servers = cfg.kafka.bootstrapServers;
+        topic = cfg.kafka.topic;
+        consumer_group = cfg.kafka.consumerGroup;
+        client_id = cfg.kafka.clientId;
+        topic_partitions = cfg.kafka.topicPartitions;
+        topic_replication_factor = cfg.kafka.topicReplicationFactor;
+        reconnect_delay = cfg.kafka.reconnectDelay;
       };
       log_level = cfg.logLevel;
     }
@@ -154,6 +165,12 @@ in
         description = "RabbitMQ AMQP port";
       };
 
+      managementPort = mkOption {
+        type = types.port;
+        default = 15672;
+        description = "RabbitMQ management API port";
+      };
+
       username = mkOption {
         type = types.str;
         default = "guest";
@@ -204,6 +221,52 @@ in
         type = types.ints.positive;
         default = 5;
         description = "Consumer reconnect delay in seconds";
+      };
+    };
+
+    kafka = {
+      enable = mkEnableOption "Kafka lifecycle events";
+
+      bootstrapServers = mkOption {
+        type = types.listOf types.str;
+        default = [ "127.0.0.1:9092" ];
+        description = "Kafka bootstrap servers";
+      };
+
+      topic = mkOption {
+        type = types.str;
+        default = "podservice.lifecycle";
+        description = "Kafka lifecycle event topic";
+      };
+
+      consumerGroup = mkOption {
+        type = types.str;
+        default = "podservice-dashboard";
+        description = "Kafka dashboard projection consumer group";
+      };
+
+      clientId = mkOption {
+        type = types.str;
+        default = "podservice";
+        description = "Kafka client identifier prefix";
+      };
+
+      topicPartitions = mkOption {
+        type = types.ints.positive;
+        default = 1;
+        description = "Lifecycle topic partition count";
+      };
+
+      topicReplicationFactor = mkOption {
+        type = types.ints.positive;
+        default = 1;
+        description = "Lifecycle topic replication factor";
+      };
+
+      reconnectDelay = mkOption {
+        type = types.ints.positive;
+        default = 5;
+        description = "Kafka projection reconnect delay in seconds";
       };
     };
 

@@ -5,6 +5,7 @@ import logging
 import os
 import secrets
 import threading
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,11 +24,20 @@ from markupsafe import escape
 from werkzeug.utils import secure_filename
 
 from .config import ServiceConfig
+from .events import KafkaStatus, LifecycleEvent
 from .feed import Episode, PodcastFeed, save_episode_metadata
 from .messaging import DownloadJob, MessagePublishError, PartialPublishError
+from .status import RabbitMQStatus
 from .utils import download_image, extract_video_id, sanitize_filename
 
 logger = logging.getLogger(__name__)
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="14" fill="#2563eb"/>
+<path d="M14 35v-5a18 18 0 0 1 36 0v5" fill="none" stroke="white" stroke-width="6" stroke-linecap="round"/>
+<rect x="10" y="31" width="10" height="20" rx="5" fill="white"/>
+<rect x="44" y="31" width="10" height="20" rx="5" fill="white"/>
+</svg>"""
 
 # Swagger configuration
 SWAGGER_CONFIG = {
@@ -63,10 +73,16 @@ class PodcastServer:
         config: ServiceConfig,
         feed: PodcastFeed,
         submit_urls: Optional[Callable[[list[str]], list[DownloadJob]]] = None,
+        rabbitmq_status: Optional[Callable[[], RabbitMQStatus]] = None,
+        kafka_status: Optional[Callable[[], KafkaStatus]] = None,
+        recent_events: Optional[Callable[[int], list[LifecycleEvent]]] = None,
     ):
         self.config = config
         self.feed = feed
         self.submit_urls = submit_urls
+        self.rabbitmq_status = rabbitmq_status
+        self.kafka_status = kafka_status
+        self.recent_events = recent_events
         self.csrf_token = secrets.token_urlsafe(32)
         self.app = Flask(__name__)
         self.swagger = Swagger(
@@ -77,6 +93,11 @@ class PodcastServer:
 
     def _setup_routes(self):
         """Setup Flask routes."""
+
+        @self.app.route("/favicon.ico")
+        @self.app.route("/favicon.svg")
+        def favicon():
+            return Response(FAVICON_SVG, mimetype="image/svg+xml")
 
         @self.app.route("/", methods=["GET"])
         def index():
@@ -97,6 +118,7 @@ class PodcastServer:
             <html>
             <head>
                 <title>Podservice</title>
+                <link rel="icon" href="/favicon.svg" type="image/svg+xml">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <style>
                     body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background-color: #fff; color: #333; }}
@@ -151,6 +173,7 @@ class PodcastServer:
                     <ul>
                         <li><a href="/feed.xml">📡 Podcast Feed</a></li>
                         <li><a href="/episodes">🎵 Episodes</a></li>
+                        <li><a href="/status">📊 Messaging Status</a></li>
                         <li><a href="/apidocs/">📚 API Docs</a></li>
                     </ul>
 
@@ -269,6 +292,135 @@ class PodcastServer:
                         }}
                     }})();
                 </script>
+            </body>
+            </html>
+            """
+
+        @self.app.route("/api/status")
+        def api_status():
+            rabbitmq, kafka, events = self._messaging_status()
+            return jsonify(
+                {
+                    "rabbitmq": {
+                        **asdict(rabbitmq),
+                        "ready": rabbitmq.ready,
+                        "unacknowledged": rabbitmq.unacknowledged,
+                        "consumers": rabbitmq.consumers,
+                    },
+                    "kafka": asdict(kafka),
+                    "events": [asdict(event) for event in events],
+                }
+            )
+
+        @self.app.route("/status")
+        def messaging_status():
+            rabbitmq, kafka, events = self._messaging_status()
+            rabbit_state = "up" if rabbitmq.connected else "down"
+            kafka_state = "up" if kafka.connected else "down"
+            queue_rows = "".join(
+                f"""
+                <tr>
+                    <td>{escape(queue.role)}</td>
+                    <td class="technical">{escape(queue.name)}</td>
+                    <td>{queue.ready}</td>
+                    <td>{queue.unacknowledged}</td>
+                    <td>{queue.consumers}</td>
+                    <td>{escape(queue.state)}</td>
+                </tr>
+                """
+                for queue in rabbitmq.queues
+            )
+            event_rows = "".join(
+                f"""
+                <tr>
+                    <td>{escape(event.occurred_at)}</td>
+                    <td><span class="event-type">{escape(event.event_type)}</span></td>
+                    <td class="technical">{escape(event.job_id)}</td>
+                    <td>{event.attempt}</td>
+                    <td class="url">{escape(event.url)}</td>
+                    <td>{escape(event.detail or "")}</td>
+                </tr>
+                """
+                for event in events
+            )
+            if not event_rows:
+                event_rows = '<tr><td colspan="6" class="empty">No lifecycle events projected yet.</td></tr>'
+            return f"""
+            <!doctype html>
+            <html>
+            <head>
+                <title>Messaging Status · Podservice</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <meta http-equiv="refresh" content="15">
+                <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+                <style>
+                    :root {{ color-scheme: light dark; }}
+                    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 1180px; margin: 32px auto; padding: 0 20px 40px; background: #f6f7fb; color: #172033; }}
+                    a {{ color: #2563eb; }}
+                    .header {{ display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 24px; }}
+                    .header h1 {{ margin-bottom: 4px; }}
+                    .header p {{ margin: 0; color: #64748b; }}
+                    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-bottom: 24px; }}
+                    .card, .panel {{ background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; box-shadow: 0 2px 8px rgba(15, 23, 42, .05); }}
+                    .card h2 {{ display: flex; align-items: center; gap: 9px; margin-top: 0; }}
+                    .state {{ width: 11px; height: 11px; border-radius: 50%; display: inline-block; }}
+                    .state.up {{ background: #16a34a; box-shadow: 0 0 0 4px #dcfce7; }}
+                    .state.down {{ background: #dc2626; box-shadow: 0 0 0 4px #fee2e2; }}
+                    .metrics {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }}
+                    .metric strong {{ display: block; font-size: 24px; }}
+                    .metric span, .error {{ color: #64748b; font-size: 13px; }}
+                    .panel {{ margin-bottom: 24px; overflow-x: auto; }}
+                    table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+                    th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
+                    th {{ color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }}
+                    .technical {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }}
+                    .url {{ max-width: 340px; overflow-wrap: anywhere; }}
+                    .event-type {{ border-radius: 999px; padding: 3px 8px; background: #dbeafe; color: #1d4ed8; white-space: nowrap; }}
+                    .empty {{ color: #64748b; text-align: center; padding: 24px; }}
+                    @media (prefers-color-scheme: dark) {{
+                        body {{ background: #111827; color: #e5e7eb; }}
+                        .card, .panel {{ background: #1f2937; border-color: #374151; }}
+                        th, td {{ border-color: #374151; }}
+                        .header p, .metric span, .error, th, .empty {{ color: #9ca3af; }}
+                        .event-type {{ background: #1e3a8a; color: #bfdbfe; }}
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div><h1>Messaging Status</h1><p>Refreshes every 15 seconds</p></div>
+                    <a href="/">← Podservice</a>
+                </div>
+                <div class="cards">
+                    <section class="card">
+                        <h2><span class="state {rabbit_state}"></span>RabbitMQ</h2>
+                        <div class="metrics">
+                            <div class="metric"><strong>{rabbitmq.ready}</strong><span>Ready</span></div>
+                            <div class="metric"><strong>{rabbitmq.unacknowledged}</strong><span>Unacked</span></div>
+                            <div class="metric"><strong>{rabbitmq.consumers}</strong><span>Consumers</span></div>
+                        </div>
+                        <p class="error">{escape(rabbitmq.error or f"RabbitMQ {rabbitmq.version or ''}")}</p>
+                    </section>
+                    <section class="card">
+                        <h2><span class="state {kafka_state}"></span>Kafka</h2>
+                        <div class="metrics">
+                            <div class="metric"><strong>{kafka.broker_count}</strong><span>Brokers</span></div>
+                            <div class="metric"><strong>{kafka.partition_count}</strong><span>Partitions</span></div>
+                            <div class="metric"><strong>{kafka.consumer_lag}</strong><span>Consumer lag</span></div>
+                        </div>
+                        <p class="error">{escape(kafka.error or self.config.kafka.topic)}</p>
+                    </section>
+                </div>
+                <section class="panel">
+                    <h2>RabbitMQ queues</h2>
+                    <table><thead><tr><th>Role</th><th>Queue</th><th>Ready</th><th>Unacked</th><th>Consumers</th><th>State</th></tr></thead>
+                    <tbody>{queue_rows}</tbody></table>
+                </section>
+                <section class="panel">
+                    <h2>Recent Kafka lifecycle events</h2>
+                    <table><thead><tr><th>Time</th><th>Event</th><th>Job</th><th>Attempt</th><th>URL</th><th>Detail</th></tr></thead>
+                    <tbody>{event_rows}</tbody></table>
+                </section>
             </body>
             </html>
             """
@@ -1237,6 +1389,34 @@ class PodcastServer:
             except Exception as e:
                 logger.error(f"Error creating episode via API: {e}", exc_info=True)
                 return jsonify({"success": False, "error": str(e)}), 500
+
+    def _messaging_status(
+        self,
+    ) -> tuple[RabbitMQStatus, KafkaStatus, list[LifecycleEvent]]:
+        try:
+            rabbitmq = (
+                self.rabbitmq_status()
+                if self.rabbitmq_status is not None
+                else RabbitMQStatus(False, error="RabbitMQ status is unavailable")
+            )
+        except Exception:
+            logger.exception("RabbitMQ status callback failed")
+            rabbitmq = RabbitMQStatus(False, error="RabbitMQ status is unavailable")
+        try:
+            kafka = (
+                self.kafka_status()
+                if self.kafka_status is not None
+                else KafkaStatus(False, error="Kafka status is unavailable")
+            )
+        except Exception:
+            logger.exception("Kafka status callback failed")
+            kafka = KafkaStatus(False, error="Kafka status is unavailable")
+        try:
+            events = self.recent_events(50) if self.recent_events is not None else []
+        except Exception:
+            logger.exception("Lifecycle event projection query failed")
+            events = []
+        return rabbitmq, kafka, events
 
     def _valid_csrf_token(self) -> bool:
         token = request.form.get("csrf_token", "")
