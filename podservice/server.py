@@ -1095,6 +1095,20 @@ class PodcastServer:
                 metadata_dir = Path(self.config.storage.metadata_dir)
                 thumbnails_dir = Path(self.config.storage.thumbnails_dir)
 
+                # Map audio filename -> title from metadata, the source of truth for
+                # "did this finish downloading" (writers may name the audio file
+                # differently from its metadata key on filename collisions).
+                titles_by_audio_name = {}
+                for meta_file in metadata_dir.glob("*.json"):
+                    try:
+                        with open(meta_file) as mf:
+                            meta = json.load(mf)
+                    except Exception:
+                        continue
+                    audio_file_recorded = meta.get("audio_file", "")
+                    if audio_file_recorded:
+                        titles_by_audio_name[Path(audio_file_recorded).name] = meta.get("title", "")
+
                 files = []
                 total_size_bytes = 0
                 for file in sorted(
@@ -1103,16 +1117,9 @@ class PodcastServer:
                     if file.is_file() and file.suffix.lower() in AUDIO_EXTENSIONS:
                         # Only show files that completed a download (i.e. have metadata).
                         # Orphaned files (failed/interrupted downloads) are skipped here.
-                        meta_file = metadata_dir / f"{file.stem}.json"
-                        if not meta_file.exists():
+                        if file.name not in titles_by_audio_name:
                             continue
-
-                        try:
-                            with open(meta_file) as mf:
-                                meta = json.load(mf)
-                                episode_title = meta.get("title", "")
-                        except Exception:
-                            continue
+                        episode_title = titles_by_audio_name[file.name]
 
                         file_size = file.stat().st_size
                         total_size_bytes += file_size
