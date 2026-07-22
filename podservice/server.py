@@ -10,7 +10,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from uuid import uuid4
 
 from flasgger import Swagger
@@ -1287,19 +1287,44 @@ class PodcastServer:
                     audio_file.unlink()
                     logger.info(f"Deleted audio file: {filename}")
 
-                # Delete corresponding metadata file
-                metadata_file = metadata_dir / f"{audio_file.stem}.json"
-                if metadata_file.exists():
+                # Find the metadata file by the audio_file it records, not by
+                # assuming its name shares the audio file's stem (writers may
+                # append a collision suffix to the audio filename only).
+                metadata_file = None
+                meta = {}
+                for candidate in metadata_dir.glob("*.json"):
+                    try:
+                        with open(candidate) as mf:
+                            candidate_meta = json.load(mf)
+                    except Exception:
+                        continue
+                    if Path(candidate_meta.get("audio_file", "")).name == filename:
+                        metadata_file = candidate
+                        meta = candidate_meta
+                        break
+
+                if metadata_file:
                     metadata_file.unlink()
                     logger.info(f"Deleted metadata file: {metadata_file.name}")
 
-                # Delete corresponding thumbnail (check for common extensions)
-                for ext in [".jpg", ".jpeg", ".png", ".webp"]:
-                    thumbnail_file = thumbnails_dir / f"{audio_file.stem}{ext}"
+                # Delete corresponding thumbnail: prefer the filename recorded in
+                # metadata, falling back to the audio file's stem for orphans.
+                thumbnail_name = ""
+                stored_image_url = meta.get("image_url", "")
+                if stored_image_url:
+                    thumbnail_name = Path(unquote(stored_image_url.split("/")[-1])).name
+                if thumbnail_name:
+                    thumbnail_file = thumbnails_dir / thumbnail_name
                     if thumbnail_file.exists():
                         thumbnail_file.unlink()
                         logger.info(f"Deleted thumbnail file: {thumbnail_file.name}")
-                        break
+                else:
+                    for ext in [".jpg", ".jpeg", ".png", ".webp"]:
+                        thumbnail_file = thumbnails_dir / f"{audio_file.stem}{ext}"
+                        if thumbnail_file.exists():
+                            thumbnail_file.unlink()
+                            logger.info(f"Deleted thumbnail file: {thumbnail_file.name}")
+                            break
 
                 # Reload episodes from metadata to update the feed
                 self.feed.episodes.clear()
