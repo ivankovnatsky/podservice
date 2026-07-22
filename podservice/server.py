@@ -185,12 +185,12 @@ class PodcastServer:
                     .section-header h2 {{ margin: 0; }}
                     .view-all {{ background-color: #000; color: #fff; text-decoration: none; padding: 8px 16px; border-radius: 4px; font-size: 14px; white-space: nowrap; }}
                     .view-all:hover {{ background-color: #333; text-decoration: none; }}
-                    .episode-row {{ display: flex; gap: 14px; overflow-x: auto; padding: 15px 0 5px 0; }}
-                    .episode-card {{ flex: 0 0 auto; width: 110px; text-decoration: none; color: inherit; }}
+                    .episode-row {{ display: flex; flex-wrap: wrap; gap: 14px; overflow: hidden; max-height: 150px; padding: 15px 0 5px 0; }}
+                    .episode-card {{ flex: 0 0 auto; width: 110px; height: 150px; text-decoration: none; color: inherit; }}
                     .episode-card:hover .episode-title {{ text-decoration: underline; }}
                     .episode-card img, .episode-art {{ width: 110px; height: 110px; border-radius: 6px; object-fit: cover; border: 1px solid #e0e0e0; display: block; }}
                     .episode-art-placeholder {{ background-color: #ddd; display: flex; align-items: center; justify-content: center; font-size: 32px; }}
-                    .episode-title {{ display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; margin-top: 6px; }}
+                    .episode-title {{ display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 16px; height: 32px; margin-top: 6px; }}
                     .episode-empty {{ color: #666; }}
                     .form-group {{ margin: 40px 0 20px 0; padding-top: 30px; border-top: 1px solid #eee; }}
                     .input-wrapper {{ position: relative; display: flex; gap: 10px; }}
