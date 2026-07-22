@@ -1101,6 +1101,19 @@ class PodcastServer:
                     audio_dir.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True
                 ):
                     if file.is_file() and file.suffix.lower() in AUDIO_EXTENSIONS:
+                        # Only show files that completed a download (i.e. have metadata).
+                        # Orphaned files (failed/interrupted downloads) are skipped here.
+                        meta_file = metadata_dir / f"{file.stem}.json"
+                        if not meta_file.exists():
+                            continue
+
+                        try:
+                            with open(meta_file) as mf:
+                                meta = json.load(mf)
+                                episode_title = meta.get("title", "")
+                        except Exception:
+                            continue
+
                         file_size = file.stat().st_size
                         total_size_bytes += file_size
                         size_mb = file_size / (1024 * 1024)
@@ -1116,17 +1129,6 @@ class PodcastServer:
                         # Fallback placeholder if no thumbnail
                         if not thumbnail_html:
                             thumbnail_html = '<div class="thumbnail-placeholder" style="width: 60px; height: 60px; background-color: #ddd; border-radius: 4px; display: flex; align-items: center; justify-content: center; color: #999; font-size: 24px;">🎵</div>'
-
-                        # Look up episode title from metadata
-                        episode_title = ""
-                        meta_file = metadata_dir / f"{file.stem}.json"
-                        if meta_file.exists():
-                            try:
-                                with open(meta_file) as mf:
-                                    meta = json.load(mf)
-                                    episode_title = meta.get("title", "")
-                            except Exception:
-                                pass
 
                         title_html = (
                             f'<div style="font-weight: 500;">{escape(episode_title)}</div>'
