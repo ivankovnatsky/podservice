@@ -157,14 +157,25 @@ class PodcastServer:
             else:
                 episodes_row = '<p class="episode-empty">No episodes yet.</p>'
 
-            message = ""
+            messages = []
             if success:
                 if success == "1":
-                    message = '<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ Added successfully!</div>'
+                    messages.append(
+                        '<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ Added successfully!</div>'
+                    )
+                elif success.isdigit():
+                    messages.append(
+                        f'<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ {escape(success)} files uploaded successfully!</div>'
+                    )
                 else:
-                    message = f'<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ {escape(success)} files uploaded successfully!</div>'
-            elif error:
-                message = f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 20px;">✗ Error: {escape(error)}</div>'
+                    messages.append(
+                        f'<div style="padding: 10px; background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; border-radius: 4px; margin-bottom: 20px;">✓ {escape(success)}</div>'
+                    )
+            if error:
+                messages.append(
+                    f'<div style="padding: 10px; background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; border-radius: 4px; margin-bottom: 20px;">✗ Error: {escape(error)}</div>'
+                )
+            message = "".join(messages)
 
             return f"""
             <html>
@@ -224,7 +235,7 @@ class PodcastServer:
                         h1 {{ font-size: 24px; }}
                         h2 {{ font-size: 20px; }}
                         .input-wrapper {{ flex-direction: column; gap: 10px; }}
-                        input[type="text"] {{ width: 100%; padding: 14px; font-size: 16px; }}
+                        input[type="text"], textarea {{ width: 100%; padding: 14px; font-size: 16px; }}
                         button {{ width: 100%; padding: 14px; font-size: 16px; }}
                         .links a {{ font-size: 16px; padding: 8px 0; }}
                         .links li {{ margin: 12px 0; }}
@@ -259,8 +270,8 @@ class PodcastServer:
                     <h2>Add from URL</h2>
                     <form method="POST" action="/add-url">
                         <input type="hidden" name="csrf_token" value="{self.csrf_token}">
-                        <div class="input-wrapper">
-                            <input type="text" name="url" placeholder="Paste URL here..." required>
+                        <div class="input-wrapper" style="align-items: flex-start;">
+                            <textarea name="url" placeholder="Paste URL(s) here (one per line)..." rows="3" style="resize: vertical;" required></textarea>
                             <button type="submit">Add to Podcast</button>
                         </div>
                     </form>
@@ -567,26 +578,67 @@ class PodcastServer:
 
         @self.app.route("/add-url", methods=["POST"])
         def add_url():
-            """Queue a URL for download."""
+            """Queue one or more URLs for download."""
             try:
-                url = request.form.get("url", "").strip()
+                raw_inputs = request.form.getlist("url") + request.form.getlist("urls")
+                raw_text = "\n".join(raw_inputs).strip()
 
-                if not url:
+                if not raw_text:
                     return redirect("/?error=URL is required")
 
-                # Basic URL validation - must be http or https
-                if not url.startswith("http://") and not url.startswith("https://"):
+                # Parse URLs separated by newlines or whitespace
+                urls = []
+                for line in raw_text.splitlines():
+                    for token in line.split():
+                        token = token.strip()
+                        if token:
+                            urls.append(token)
+
+                if not urls:
+                    return redirect("/?error=URL is required")
+
+                # Validate all URLs - must be http or https
+                invalid_urls = [
+                    u
+                    for u in urls
+                    if not u.startswith("http://") and not u.startswith("https://")
+                ]
+                if invalid_urls:
+                    if len(invalid_urls) == 1:
+                        return redirect(
+                            f"/?error={quote(f'Invalid URL (must start with http:// or https://): {invalid_urls[0]}')}"
+                        )
                     return redirect(
-                        "/?error=Invalid URL (must start with http:// or https://)"
+                        f"/?error={quote(f'Invalid URL(s) (must start with http:// or https://): {\", \".join(invalid_urls)}')}"
                     )
 
                 if self.submit_urls is None:
                     raise MessagePublishError("Download queue is unavailable")
 
-                jobs = self.submit_urls([url])
-                logger.info("Queued download job %s via web interface", jobs[0].job_id)
-                return redirect("/?success=1")
+                jobs = self.submit_urls(urls)
+                logger.info(
+                    "Queued %s download job(s) via web interface", len(jobs)
+                )
+                if len(urls) == 1:
+                    return redirect("/?success=1")
+                return redirect(
+                    f"/?success={len(urls)}+URLs+queued+successfully"
+                )
 
+            except PartialPublishError as e:
+                logger.error(
+                    "Queued %s job(s), but %s job(s) were not accepted",
+                    len(e.accepted_jobs),
+                    len(e.unaccepted_jobs),
+                )
+                failure_note = quote(
+                    f"{len(e.unaccepted_jobs)} URL(s) could not be queued"
+                )
+                if e.accepted_jobs:
+                    return redirect(
+                        f"/?success={len(e.accepted_jobs)}+URLs+queued+successfully&error={failure_note}"
+                    )
+                return redirect(f"/?error={failure_note}")
             except MessagePublishError as e:
                 logger.error("Unable to queue URL: %s", e)
                 return redirect("/?error=Download queue is unavailable")

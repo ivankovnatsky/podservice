@@ -434,6 +434,87 @@ class TestQueueURLAPI:
         assert response.json["unaccepted_urls"] == ["https://example.com/two"]
 
 
+class TestAddURLWebForm:
+    """Tests for the /add-url HTML form endpoint."""
+
+    def test_form_submits_single_url(self, client, submit_urls):
+        response = client.post(
+            "/add-url",
+            data={"url": "https://example.com/single"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        assert response.location == "/?success=1"
+        submit_urls.assert_called_once_with(["https://example.com/single"])
+
+    def test_form_submits_multiple_urls_multiline(self, client, submit_urls):
+        urls_text = "https://example.com/one\nhttps://example.com/two\nhttps://example.com/three"
+        response = client.post(
+            "/add-url",
+            data={"url": urls_text},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        assert response.location == "/?success=3+URLs+queued+successfully"
+        submit_urls.assert_called_once_with([
+            "https://example.com/one",
+            "https://example.com/two",
+            "https://example.com/three",
+        ])
+
+    def test_form_rejects_empty_input(self, client, submit_urls):
+        response = client.post(
+            "/add-url",
+            data={"url": "   \n  "},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        assert "error=URL" in response.location
+        submit_urls.assert_not_called()
+
+    def test_form_rejects_invalid_url(self, client, submit_urls):
+        response = client.post(
+            "/add-url",
+            data={"url": "https://example.com/valid\ninvalid-url"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        assert "error=Invalid" in response.location
+        submit_urls.assert_not_called()
+
+    def test_form_handles_partial_publish_error(self, client, submit_urls):
+        submit_urls.side_effect = PartialPublishError(
+            [
+                DownloadJob(
+                    job_id="accepted-1",
+                    url="https://example.com/one",
+                    submitted_at="2026-07-20T00:00:00+00:00",
+                )
+            ],
+            [
+                DownloadJob(
+                    job_id="unaccepted-2",
+                    url="https://example.com/two",
+                    submitted_at="2026-07-20T00:00:00+00:00",
+                )
+            ],
+        )
+
+        response = client.post(
+            "/add-url",
+            data={"url": "https://example.com/one\nhttps://example.com/two"},
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        assert "success=1+URLs+queued+successfully" in response.location
+        assert "error=1+URL%28s%29+could+not+be+queued" in response.location or "error=1+URL(s)+could+not+be+queued" in response.location
+
+
 class TestIndexEpisodes:
     def test_index_shows_episode_row_and_view_all(self, client, test_config):
         audio_dir = Path(test_config.storage.audio_dir)
@@ -476,6 +557,12 @@ class TestHtmlEscaping:
 
         assert b"<script>alert(1)</script>" not in response.data
         assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in response.data
+
+    def test_root_renders_both_success_and_error_messages(self, client):
+        response = client.get("/", query_string={"success": "1 URLs queued successfully", "error": "1 URL(s) could not be queued"})
+
+        assert b"1 URLs queued successfully" in response.data
+        assert b"1 URL(s) could not be queued" in response.data
 
     def test_episode_list_escapes_query_messages(self, client, test_config):
         audio_dir = Path(test_config.storage.audio_dir)
