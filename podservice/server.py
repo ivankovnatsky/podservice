@@ -248,6 +248,17 @@ class PodcastServer:
 
                 {message}
 
+                <div class="form-group">
+                    <h2>Add from URL</h2>
+                    <form method="POST" action="/add-url">
+                        <input type="hidden" name="csrf_token" value="{self.csrf_token}">
+                        <div class="input-wrapper" style="align-items: flex-start;">
+                            <textarea name="url" placeholder="Paste URL(s) here (one per line)..." rows="3" style="resize: vertical;" required></textarea>
+                            <button type="submit">Add to Podcast</button>
+                        </div>
+                    </form>
+                </div>
+
                 <div class="section">
                     <div class="section-header">
                         <h2>Episodes</h2>
@@ -264,17 +275,6 @@ class PodcastServer:
                         <li><a href="/apidocs/">📚 API Docs</a></li>
                     </ul>
 
-                </div>
-
-                <div class="form-group">
-                    <h2>Add from URL</h2>
-                    <form method="POST" action="/add-url">
-                        <input type="hidden" name="csrf_token" value="{self.csrf_token}">
-                        <div class="input-wrapper" style="align-items: flex-start;">
-                            <textarea name="url" placeholder="Paste URL(s) here (one per line)..." rows="3" style="resize: vertical;" required></textarea>
-                            <button type="submit">Add to Podcast</button>
-                        </div>
-                    </form>
                 </div>
 
                 <div class="form-group">
