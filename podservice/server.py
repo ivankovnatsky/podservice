@@ -603,13 +603,15 @@ class PodcastServer:
                     for u in urls
                     if not u.startswith("http://") and not u.startswith("https://")
                 ]
+
                 if invalid_urls:
                     if len(invalid_urls) == 1:
                         return redirect(
                             f"/?error={quote(f'Invalid URL (must start with http:// or https://): {invalid_urls[0]}')}"
                         )
+                    invalid_joined = ", ".join(invalid_urls)
                     return redirect(
-                        f"/?error={quote(f'Invalid URL(s) (must start with http:// or https://): {\", \".join(invalid_urls)}')}"
+                        f"/?error={quote(f'Invalid URL(s) (must start with http:// or https://): {invalid_joined}')}"
                     )
 
                 if self.submit_urls is None:
