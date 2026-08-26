@@ -331,7 +331,6 @@ class KafkaTopicManager:
                 bootstrap_servers=list(self.config.bootstrap_servers),
                 client_id=f"{self.config.client_id}-admin",
                 request_timeout_ms=5000,
-                api_version_auto_timeout_ms=5000,
             )
             try:
                 if self.config.topic not in admin.list_topics():
@@ -543,7 +542,6 @@ class KafkaProjectionConsumer:
             auto_offset_reset="earliest",
             enable_auto_commit=False,
             request_timeout_ms=15000,
-            api_version_auto_timeout_ms=5000,
         )
         try:
             while not self.stop_event.is_set():
@@ -610,7 +608,6 @@ class KafkaStatusProbe:
                 bootstrap_servers=list(self.config.bootstrap_servers),
                 client_id=f"{self.config.client_id}-status",
                 request_timeout_ms=3000,
-                api_version_auto_timeout_ms=3000,
             )
             cluster = admin.describe_cluster()
             topics = admin.list_topics()
@@ -625,7 +622,6 @@ class KafkaStatusProbe:
                     enable_auto_commit=False,
                     session_timeout_ms=6000,
                     request_timeout_ms=7000,
-                    api_version_auto_timeout_ms=3000,
                 )
                 partitions = consumer.partitions_for_topic(self.config.topic) or set()
                 topic_partitions = [
