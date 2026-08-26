@@ -1,7 +1,7 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/ee0632b43f6f098575479910fca05c24b0ada9dd";
-    flake-utils.url = "github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs =
@@ -26,7 +26,7 @@
             flask
             flasgger
             pika
-            kafka-python-ng
+            kafka-python
             yt-dlp
             pyyaml
             requests
