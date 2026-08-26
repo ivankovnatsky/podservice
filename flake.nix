@@ -37,21 +37,21 @@
           ];
 
         # Python environment with all dependencies
-        pythonEnv = pkgs.python312.withPackages pythonPackages;
+        pythonEnv = pkgs.python3.withPackages pythonPackages;
 
         # Package the service
-        podservicePackage = pkgs.python312Packages.buildPythonApplication {
+        podservicePackage = pkgs.python3Packages.buildPythonApplication {
           pname = "podservice";
           version = "0.1.0";
           pyproject = true;
 
           src = ./.;
 
-          build-system = with pkgs.python312Packages; [
+          build-system = with pkgs.python3Packages; [
             poetry-core
           ];
 
-          dependencies = pythonPackages pkgs.python312Packages;
+          dependencies = pythonPackages pkgs.python3Packages;
 
           meta = with pkgs.lib; {
             description = "Podcast Feed Service";
