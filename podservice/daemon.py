@@ -29,6 +29,7 @@ from .messaging import (
     RabbitMQConsumer,
     RabbitMQPublisher,
 )
+from .s3 import S3Mirror
 from .server import PodcastServer
 from .status import RabbitMQStatusProbe
 
@@ -75,6 +76,14 @@ class PodService:
             metadata_dir=str(self.metadata_dir),
             thumbnails_dir=self.config.storage.thumbnails_dir,
         )
+
+        self.s3_mirror = None
+        if self.config.storage.s3.enabled:
+            self.s3_mirror = S3Mirror(
+                self.config.storage.s3,
+                self.feed,
+                thumbnails_dir=self.config.storage.thumbnails_dir,
+            )
 
         self.episode_service = EpisodeService(self.downloader, self.feed)
         self.publisher = RabbitMQPublisher(self.config.rabbitmq)
@@ -140,6 +149,8 @@ class PodService:
             self.kafka_publisher.start()
             self.kafka_projection.start()
             self._cleanup_partial_uploads()
+            if self.s3_mirror is not None:
+                self.s3_mirror.start()
             self._migrate_legacy_urls()
             self.consumer.start()
             self.server.start()
@@ -167,6 +178,8 @@ class PodService:
         self.consumer.stop()
         self.kafka_projection.stop()
         self.kafka_publisher.close()
+        if getattr(self, "s3_mirror", None) is not None:
+            self.s3_mirror.stop()
 
         logger.info("Pod Service stopped")
 

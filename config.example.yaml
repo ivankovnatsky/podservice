@@ -35,6 +35,23 @@ storage:
   # Thumbnails directory (defaults to data_dir/thumbnails if not set)
   # thumbnails_dir: "./data/thumbnails"
 
+  # Optional: mirror feed.xml, audio and thumbnails to S3-compatible storage
+  # (e.g. Cloudflare R2) so public-only clients like Overcast can use the feed.
+  # Public feed: <public_base_url>/<prefix>/feed.xml
+  s3:
+    enabled: false
+    endpoint_url: "https://<account_id>.r2.cloudflarestorage.com"
+    bucket: "<bucket>"
+    region: "auto"
+    public_base_url: "https://<public-domain>"
+    # The bucket is publicly readable; use an unguessable prefix
+    # (e.g. `openssl rand -hex 16`)
+    prefix: "<random-token>"
+    # Files holding the credentials; if both are unset, the standard
+    # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY environment variables are used
+    access_key_id_file: "/run/secrets/podservice-s3-access-key-id"
+    secret_access_key_file: "/run/secrets/podservice-s3-secret-access-key"
+
 rabbitmq:
   # RabbitMQ connection and durable download-job routing
   host: "127.0.0.1"

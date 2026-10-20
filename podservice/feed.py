@@ -1,11 +1,13 @@
 """Podcast feed generation."""
 
+import copy
 import json
 import logging
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import Callable, List, Optional
 from urllib.parse import quote, unquote
 from xml.etree import ElementTree as ET
 
@@ -64,21 +66,71 @@ class PodcastFeed:
         self.category = category
         self.image_url = image_url
         self.episodes: List[Episode] = []
+        self._listeners: List[Callable[[], None]] = []
+        self._lock = threading.RLock()
+
+    def add_listener(self, listener: Callable[[], None]) -> None:
+        """Call listener after the episode list changes."""
+        self._listeners.append(listener)
+
+    def _notify(self) -> None:
+        for listener in self._listeners:
+            try:
+                listener()
+            except Exception:
+                logger.exception("Feed change listener failed")
 
     def add_episode(self, episode: Episode):
         """Add an episode to the feed."""
-        # Check if episode already exists (by GUID)
-        existing_guids = {ep.guid for ep in self.episodes}
-        if episode.guid not in existing_guids:
-            self.episodes.append(episode)
-            # Sort by pub_date, newest first
-            self.episodes.sort(key=lambda x: x.pub_date, reverse=True)
+        with self._lock:
+            # Check if episode already exists (by GUID)
+            existing_guids = {ep.guid for ep in self.episodes}
+            added = episode.guid not in existing_guids
+            if added:
+                self.episodes.append(episode)
+                # Sort by pub_date, newest first
+                self.episodes.sort(key=lambda x: x.pub_date, reverse=True)
+        if added:
             logger.info(f"Added episode: {episode.title}")
+            self._notify()
         else:
             logger.debug(f"Episode already exists: {episode.title}")
 
-    def generate_xml(self) -> str:
-        """Generate RSS 2.0 XML feed with iTunes extensions."""
+    def clear_episodes(self) -> None:
+        """Remove all episodes from the feed."""
+        with self._lock:
+            self.episodes = []
+        self._notify()
+
+    def reload_episodes(
+        self, metadata_dir: str, audio_dir: str = "", thumbnails_dir: str = ""
+    ) -> None:
+        """Replace episodes with those found in metadata_dir.
+
+        Loads into a staged copy and swaps the list in one assignment, so
+        concurrent readers (the S3 mirror) never observe a half-empty feed.
+        Holding the lock keeps a concurrent add_episode from being lost.
+        """
+        with self._lock:
+            staged = copy.copy(self)
+            staged.episodes = []
+            staged._listeners = []
+            staged._lock = threading.RLock()
+            staged.load_episodes_from_metadata(
+                metadata_dir, audio_dir=audio_dir, thumbnails_dir=thumbnails_dir
+            )
+            self.episodes = staged.episodes
+        self._notify()
+
+    def generate_xml(self, media_base_url: Optional[str] = None) -> str:
+        """Generate RSS 2.0 XML feed with iTunes extensions.
+
+        With media_base_url, enclosure and thumbnail URLs point at that base
+        (``<media_base_url>/audio/...``, ``<media_base_url>/thumbnails/...``)
+        instead of this server.
+        """
+        link = media_base_url or self.base_url
+        local_thumbnails = f"{self.base_url}/thumbnails/"
         # Create RSS root
         rss = ET.Element("rss")
         rss.set("version", "2.0")
@@ -91,7 +143,7 @@ class PodcastFeed:
         # Add channel metadata
         ET.SubElement(channel, "title").text = self.title
         ET.SubElement(channel, "description").text = self.description
-        ET.SubElement(channel, "link").text = self.base_url
+        ET.SubElement(channel, "link").text = link
         ET.SubElement(channel, "language").text = self.language
 
         # iTunes tags
@@ -109,8 +161,15 @@ class PodcastFeed:
             image.set("href", self.image_url)
 
         # Add episodes
-        for episode in self.episodes:
+        for episode in list(self.episodes):
             item = ET.SubElement(channel, "item")
+
+            audio_url = episode.audio_url
+            image_url = episode.image_url
+            if media_base_url:
+                audio_url = f"{media_base_url}/audio/{quote(os.path.basename(episode.audio_file))}"
+                if image_url.startswith(local_thumbnails):
+                    image_url = f"{media_base_url}/thumbnails/{image_url[len(local_thumbnails) :]}"
 
             ET.SubElement(item, "title").text = episode.title
             ET.SubElement(item, "description").text = episode.description
@@ -118,7 +177,7 @@ class PodcastFeed:
 
             # Enclosure (audio file)
             enclosure = ET.SubElement(item, "enclosure")
-            enclosure.set("url", episode.audio_url)
+            enclosure.set("url", audio_url)
             enclosure.set("type", "audio/mpeg")
             enclosure.set("length", str(episode.file_size))
 
@@ -144,9 +203,9 @@ class PodcastFeed:
                 ET.SubElement(item, "link").text = episode.source_url
 
             # Episode image
-            if episode.image_url:
+            if image_url:
                 image = ET.SubElement(item, "itunes:image")
-                image.set("href", episode.image_url)
+                image.set("href", image_url)
 
         # Convert to string with proper formatting
         ET.indent(rss, space="  ")

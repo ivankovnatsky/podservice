@@ -31,6 +31,59 @@ class PodcastConfig:
 
 
 @dataclass
+class S3Config:
+    """S3-compatible object storage (e.g. Cloudflare R2) mirroring the public feed."""
+
+    enabled: bool = False
+    endpoint_url: Optional[str] = None
+    bucket: Optional[str] = None
+    region: str = "auto"
+    public_base_url: Optional[str] = None
+    # Anyone who knows the public URL can read the bucket; an unguessable
+    # prefix keeps the feed and media off predictable paths.
+    prefix: Optional[str] = ""
+    access_key_id_file: Optional[str] = None
+    secret_access_key_file: Optional[str] = None
+
+    def __post_init__(self):
+        self.prefix = (self.prefix or "").strip("/")
+        if self.public_base_url is not None:
+            self.public_base_url = self.public_base_url.rstrip("/")
+        for name in ("access_key_id_file", "secret_access_key_file"):
+            value = getattr(self, name)
+            if value is not None:
+                setattr(
+                    self,
+                    name,
+                    os.path.abspath(os.path.expandvars(os.path.expanduser(value))),
+                )
+        if not self.enabled:
+            return
+        missing = [
+            name
+            for name in ("endpoint_url", "bucket", "public_base_url")
+            if not getattr(self, name)
+        ]
+        if missing:
+            raise ValueError(f"storage.s3 requires {', '.join(missing)}")
+        if (self.access_key_id_file is None) != (self.secret_access_key_file is None):
+            raise ValueError(
+                "storage.s3.access_key_id_file and secret_access_key_file "
+                "must be set together"
+            )
+
+    @property
+    def key_prefix(self) -> str:
+        return f"{self.prefix}/" if self.prefix else ""
+
+    @property
+    def public_prefix_url(self) -> str:
+        if self.prefix:
+            return f"{self.public_base_url}/{self.prefix}"
+        return self.public_base_url
+
+
+@dataclass
 class StorageConfig:
     """Storage paths configuration."""
 
@@ -38,9 +91,13 @@ class StorageConfig:
     audio_dir: Optional[str] = None
     metadata_dir: Optional[str] = None
     thumbnails_dir: Optional[str] = None
+    s3: S3Config = field(default_factory=S3Config)
 
     def __post_init__(self):
         """Set audio_dir, metadata_dir, and thumbnails_dir if not provided and resolve to absolute paths."""
+        if isinstance(self.s3, dict):
+            self.s3 = S3Config(**self.s3)
+
         # Convert to absolute paths
         self.data_dir = os.path.abspath(os.path.expanduser(self.data_dir))
 
@@ -233,6 +290,16 @@ def save_config(config: ServiceConfig, config_path: Optional[str] = None) -> Non
             "audio_dir": config.storage.audio_dir,
             "metadata_dir": config.storage.metadata_dir,
             "thumbnails_dir": config.storage.thumbnails_dir,
+            "s3": {
+                "enabled": config.storage.s3.enabled,
+                "endpoint_url": config.storage.s3.endpoint_url,
+                "bucket": config.storage.s3.bucket,
+                "region": config.storage.s3.region,
+                "public_base_url": config.storage.s3.public_base_url,
+                "prefix": config.storage.s3.prefix,
+                "access_key_id_file": config.storage.s3.access_key_id_file,
+                "secret_access_key_file": config.storage.s3.secret_access_key_file,
+            },
         },
         "rabbitmq": {
             "host": config.rabbitmq.host,

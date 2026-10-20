@@ -19,6 +19,7 @@ dependencies = [
     "requests",
     "click",
     "Pillow",
+    "boto3",
 ]
 
 [project.urls]
@@ -51,6 +52,7 @@ PyYAML = "*"
 requests = "*"
 click = "*"
 Pillow = "*"
+boto3 = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"

@@ -1381,8 +1381,7 @@ class PodcastServer:
                             break
 
                 # Reload episodes from metadata to update the feed
-                self.feed.episodes.clear()
-                self.feed.load_episodes_from_metadata(
+                self.feed.reload_episodes(
                     str(metadata_dir),
                     audio_dir=self.config.storage.audio_dir,
                     thumbnails_dir=self.config.storage.thumbnails_dir,
@@ -1447,7 +1446,7 @@ class PodcastServer:
                             )
 
                 # Clear all episodes from the feed
-                self.feed.episodes.clear()
+                self.feed.clear_episodes()
 
                 logger.info(f"Deleted all episodes (total: {deleted_count})")
                 return redirect("/episodes?success=1")

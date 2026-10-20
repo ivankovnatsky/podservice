@@ -32,6 +32,7 @@
             requests
             click
             pillow
+            boto3
             # Development & Testing
             pytest
           ];
