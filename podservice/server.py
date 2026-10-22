@@ -35,6 +35,7 @@ from .events import (
 )
 from .feed import Episode, PodcastFeed, save_episode_metadata
 from .messaging import DownloadJob, MessagePublishError, PartialPublishError
+from .s3 import MirrorStatus
 from .status import RabbitMQStatus
 from .utils import download_image, extract_video_id, sanitize_filename
 
@@ -102,6 +103,7 @@ class PodcastServer:
         database_status: Optional[Callable[[], DatabaseStatus]] = None,
         recent_events: Optional[Callable[[int], list[LifecycleEvent]]] = None,
         emit_upload_event: Optional[Callable[..., None]] = None,
+        s3_status: Optional[Callable[[], MirrorStatus]] = None,
     ):
         self.config = config
         self.feed = feed
@@ -111,6 +113,7 @@ class PodcastServer:
         self.database_status = database_status
         self.recent_events = recent_events
         self.emit_upload_event = emit_upload_event
+        self.s3_status = s3_status
         self.csrf_token = secrets.token_urlsafe(32)
         self.app = Flask(__name__)
         self.swagger = Swagger(
@@ -427,10 +430,19 @@ class PodcastServer:
                         and detail.
                       items:
                         type: object
+                    s3:
+                      type: object
+                      description: >
+                        Public mirror state, or null when the mirror is off:
+                        free-tier limits, bytes in the bucket and account,
+                        class A/B operations used, episodes mirrored or
+                        evicted, and the reason the mirror is paused.
             """
             rabbitmq, kafka, database, events = self._data_status()
+            mirror = self._mirror_status()
             return jsonify(
                 {
+                    "s3": asdict(mirror) if mirror is not None else None,
                     "rabbitmq": {
                         **asdict(rabbitmq),
                         "ready": rabbitmq.ready,
@@ -483,6 +495,7 @@ class PodcastServer:
             )
             if not event_rows:
                 event_rows = '<tr><td colspan="8" class="empty">No lifecycle events projected yet.</td></tr>'
+            mirror_card = self._mirror_card(self._mirror_status())
             return f"""
             <!doctype html>
             <html>
@@ -561,6 +574,7 @@ class PodcastServer:
                         <p class="error">{escape(database.error or database.path)}</p>
                         <p class="error">Latest event: {escape(database.last_event_at or "none")}</p>
                     </section>
+                    {mirror_card}
                 </div>
                 <section class="panel">
                     <h2>RabbitMQ queues</h2>
@@ -1750,6 +1764,55 @@ class PodcastServer:
                         detail=str(e),
                     )
                 return jsonify({"success": False, "error": str(e)}), 500
+
+    def _mirror_status(self) -> Optional[MirrorStatus]:
+        if self.s3_status is None:
+            return None
+        try:
+            return self.s3_status()
+        except Exception:
+            logger.exception("S3 mirror status callback failed")
+            return None
+
+    def _mirror_card(self, mirror: Optional[MirrorStatus]) -> str:
+        if mirror is None:
+            return ""
+        state = "down" if mirror.paused or mirror.last_error else "up"
+        used = (
+            mirror.account_bytes
+            if mirror.account_bytes is not None
+            else mirror.bucket_bytes
+        )
+        class_a = max(mirror.class_a_used_local, mirror.class_a_used_account or 0)
+        class_b = (
+            str(mirror.class_b_used_account)
+            if mirror.class_b_used_account is not None
+            else "n/a"
+        )
+        note = (
+            mirror.paused
+            or mirror.last_error
+            or (f"Last sync: {mirror.last_sync}" if mirror.last_sync else "Not synced yet")
+        )
+        evicted = ""
+        if mirror.evicted_episodes:
+            evicted = (
+                f'<p class="error">{mirror.evicted_episodes} oldest episode(s) '
+                "left out of the public feed to stay under the storage limit</p>"
+            )
+        return f"""
+                    <section class="card">
+                        <h2><span class="state {state}"></span>Public mirror (R2)</h2>
+                        <div class="metrics">
+                            <div class="metric"><strong>{self._format_bytes(used or 0)}</strong><span>of {self._format_bytes(mirror.storage_limit_bytes)}</span></div>
+                            <div class="metric"><strong>{class_a}</strong><span>Class A / {mirror.class_a_limit}</span></div>
+                            <div class="metric"><strong>{escape(class_b)}</strong><span>Class B / {mirror.class_b_limit}</span></div>
+                            <div class="metric"><strong>{mirror.mirrored_episodes}</strong><span>Episodes</span></div>
+                        </div>
+                        <p class="error">{escape(note)}</p>
+                        {evicted}
+                    </section>
+        """
 
     def _data_status(
         self,

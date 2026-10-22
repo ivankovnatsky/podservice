@@ -44,12 +44,28 @@ class S3Config:
     prefix: Optional[str] = ""
     access_key_id_file: Optional[str] = None
     secret_access_key_file: Optional[str] = None
+    # Free-tier guardrails. R2's free tier is 10 GB-month of storage, 1M
+    # class A and 10M class B operations per month, with no spend cap on the
+    # Cloudflare side; the defaults keep headroom under each. Storage covers
+    # the whole bucket (and the whole account when Cloudflare analytics is
+    # configured), since the free tier is per account, not per prefix.
+    max_storage_bytes: int = 9_000_000_000
+    max_class_a_operations: int = 500_000
+    max_class_b_operations: int = 5_000_000
+    # Optional account-wide usage via the Cloudflare GraphQL analytics API;
+    # the token needs "Account Analytics: Read" (R2 S3 keys cannot do this).
+    cloudflare_account_id: Optional[str] = None
+    cloudflare_api_token_file: Optional[str] = None
 
     def __post_init__(self):
         self.prefix = (self.prefix or "").strip("/")
         if self.public_base_url is not None:
             self.public_base_url = self.public_base_url.rstrip("/")
-        for name in ("access_key_id_file", "secret_access_key_file"):
+        for name in (
+            "access_key_id_file",
+            "secret_access_key_file",
+            "cloudflare_api_token_file",
+        ):
             value = getattr(self, name)
             if value is not None:
                 setattr(
@@ -71,6 +87,22 @@ class S3Config:
                 "storage.s3.access_key_id_file and secret_access_key_file "
                 "must be set together"
             )
+        for name in (
+            "max_storage_bytes",
+            "max_class_a_operations",
+            "max_class_b_operations",
+        ):
+            if int(getattr(self, name)) <= 0:
+                raise ValueError(f"storage.s3.{name} must be positive")
+        if bool(self.cloudflare_account_id) != bool(self.cloudflare_api_token_file):
+            raise ValueError(
+                "storage.s3.cloudflare_account_id and cloudflare_api_token_file "
+                "must be set together"
+            )
+
+    @property
+    def analytics_enabled(self) -> bool:
+        return bool(self.cloudflare_account_id and self.cloudflare_api_token_file)
 
     @property
     def key_prefix(self) -> str:
@@ -299,6 +331,11 @@ def save_config(config: ServiceConfig, config_path: Optional[str] = None) -> Non
                 "prefix": config.storage.s3.prefix,
                 "access_key_id_file": config.storage.s3.access_key_id_file,
                 "secret_access_key_file": config.storage.s3.secret_access_key_file,
+                "max_storage_bytes": config.storage.s3.max_storage_bytes,
+                "max_class_a_operations": config.storage.s3.max_class_a_operations,
+                "max_class_b_operations": config.storage.s3.max_class_b_operations,
+                "cloudflare_account_id": config.storage.s3.cloudflare_account_id,
+                "cloudflare_api_token_file": config.storage.s3.cloudflare_api_token_file,
             },
         },
         "rabbitmq": {

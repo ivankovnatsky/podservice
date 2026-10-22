@@ -122,12 +122,17 @@ class PodcastFeed:
             self.episodes = staged.episodes
         self._notify()
 
-    def generate_xml(self, media_base_url: Optional[str] = None) -> str:
+    def generate_xml(
+        self,
+        media_base_url: Optional[str] = None,
+        episodes: Optional[list[Episode]] = None,
+    ) -> str:
         """Generate RSS 2.0 XML feed with iTunes extensions.
 
         With media_base_url, enclosure and thumbnail URLs point at that base
         (``<media_base_url>/audio/...``, ``<media_base_url>/thumbnails/...``)
-        instead of this server.
+        instead of this server. ``episodes`` limits the feed to that subset
+        instead of every episode.
         """
         link = media_base_url or self.base_url
         local_thumbnails = f"{self.base_url}/thumbnails/"
@@ -161,7 +166,7 @@ class PodcastFeed:
             image.set("href", self.image_url)
 
         # Add episodes
-        for episode in list(self.episodes):
+        for episode in list(self.episodes) if episodes is None else episodes:
             item = ET.SubElement(channel, "item")
 
             audio_url = episode.audio_url

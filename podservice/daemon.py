@@ -83,6 +83,9 @@ class PodService:
                 self.config.storage.s3,
                 self.feed,
                 thumbnails_dir=self.config.storage.thumbnails_dir,
+                ledger_path=Path(self.config.storage.data_dir)
+                / "db"
+                / "s3-operations.json",
             )
 
         self.episode_service = EpisodeService(self.downloader, self.feed)
@@ -117,6 +120,7 @@ class PodService:
             database_status=self.event_store.status,
             recent_events=self.event_store.recent,
             emit_upload_event=self._emit_upload_lifecycle,
+            s3_status=self.s3_mirror.status if self.s3_mirror is not None else None,
         )
 
         # Set up signal handlers

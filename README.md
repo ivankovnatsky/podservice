@@ -123,6 +123,28 @@ kafka:
 log_level: "INFO"
 ```
 
+### Public mirror on Cloudflare R2
+
+`storage.s3` mirrors `feed.xml`, audio and thumbnails to an S3-compatible
+bucket for public-only clients (Overcast, Apple Podcasts). See
+`config.example.yaml` for all keys.
+
+The mirror stays inside R2's free tier (10 GB storage, 1M class A and 10M
+class B operations per month) and never writes past a limit:
+
+- `max_storage_bytes` (default 9 GB): the whole bucket is measured on every
+  sync. When new episodes don't fit, the oldest are dropped from the public
+  feed and deleted from the bucket. The local library is untouched.
+- `max_class_a_operations` (default 500k): every request the service sends is
+  counted in a local ledger over a rolling 31 days before it goes out.
+- `cloudflare_account_id` + `cloudflare_api_token_file` (optional, token
+  permission "Account Analytics: Read"): also checks account-wide storage and
+  class A/B counts, the same numbers as the R2 dashboard. Reads by podcast
+  clients are class B; the service only pauses on them, it cannot stop them.
+
+`/status` and `GET /api/status` (`s3` field) show usage per limit, mirrored
+and evicted episodes, and why the mirror is paused.
+
 ## Architecture
 
 ```mermaid

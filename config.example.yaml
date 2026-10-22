@@ -51,6 +51,19 @@ storage:
     # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY environment variables are used
     access_key_id_file: "/run/secrets/podservice-s3-access-key-id"
     secret_access_key_file: "/run/secrets/podservice-s3-secret-access-key"
+    # Free-tier guardrails: the mirror never writes past any of these.
+    # R2 free tier: 10 GB storage, 1M class A, 10M class B ops per month.
+    # Storage is measured over the whole bucket; oldest episodes are dropped
+    # from the public feed when new ones don't fit. Class A ops the service
+    # sends are counted locally over a rolling 31 days.
+    max_storage_bytes: 9000000000
+    max_class_a_operations: 500000
+    max_class_b_operations: 5000000
+    # Optional: also check account-wide usage (all buckets, reads by podcast
+    # clients) via the Cloudflare analytics API. Token needs
+    # "Account Analytics: Read". If the API is unreachable, writes pause.
+    # cloudflare_account_id: "<account_id>"
+    # cloudflare_api_token_file: "/run/secrets/podservice-cloudflare-api-token"
 
 rabbitmq:
   # RabbitMQ connection and durable download-job routing
