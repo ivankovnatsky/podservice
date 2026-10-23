@@ -253,7 +253,9 @@ class S3Mirror:
 
     def _run(self) -> None:
         while True:
-            self._pending.wait()
+            # The periodic check catches storage growth from outside the mirror,
+            # which fires no feed change.
+            self._pending.wait(self.config.check_interval)
             if self._stopping.is_set():
                 return
             self._pending.clear()
@@ -332,13 +334,31 @@ class S3Mirror:
             return
 
         planned, evicted = self._plan(episodes, remote_media, budget)
+        kept_keys = {key for item in planned for key in item.objects}
+        evicted_keys = {
+            key
+            for episode in evicted
+            for key, _ in self._episode_objects(episode)
+            if key not in kept_keys
+        }
+        cleanup_bytes = sum(remote_media.get(key, 0) for key in evicted_keys)
+        cleanup_limit = (
+            self.config.max_storage_bytes * self.config.max_cleanup_percent // 100
+        )
+        if cleanup_bytes > cleanup_limit:
+            raise BudgetExceeded(
+                f"cleanup would delete {cleanup_bytes} bytes of mirrored episodes, "
+                f"more than {self.config.max_cleanup_percent}% of the "
+                f"{self.config.max_storage_bytes} byte limit"
+            )
         if evicted:
             logger.warning(
                 "Storage limit reached: %s of %s episode(s) kept in the mirror, "
-                "oldest %s left out: %s",
+                "oldest %s left out, %s bytes deleted: %s",
                 len(planned),
                 len(episodes),
                 len(evicted),
+                cleanup_bytes,
                 ", ".join(ep.title for ep in evicted[:5]),
             )
 
@@ -416,16 +436,11 @@ class S3Mirror:
         )
 
     def _delete(self, keys: list[str]) -> None:
-        for start in range(0, len(keys), 1000):
-            batch = keys[start : start + 1000]
-            # DeleteObjects is not on R2's free list; count it as class A.
-            self.ledger.charge(1)
-            self.client.delete_objects(
-                Bucket=self.config.bucket,
-                Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
-            )
-            for key in batch:
-                logger.info("Deleted %s", key)
+        # Single DeleteObject is free on R2 (batch DeleteObjects is class A),
+        # so eviction never waits on the operation budget.
+        for key in keys:
+            self.client.delete_object(Bucket=self.config.bucket, Key=key)
+            logger.info("Deleted %s", key)
 
     def _account_usage(self) -> Optional[R2AccountUsage]:
         if self.analytics is None:
@@ -481,11 +496,7 @@ class S3Mirror:
             objects: dict[str, Path] = {}
             size = 0
             audio = Path(episode.audio_file)
-            candidates = [(f"{prefix}audio/{audio.name}", audio)]
-            thumbnail = self._thumbnail_path(episode.image_url)
-            if thumbnail is not None:
-                candidates.append((f"{prefix}thumbnails/{thumbnail.name}", thumbnail))
-            for key, path in candidates:
+            for key, path in self._episode_objects(episode):
                 if key in remote_media:
                     object_size = remote_media[key]
                 elif path.exists():
@@ -521,6 +532,15 @@ class S3Mirror:
             used += size
             planned.append(_PlannedEpisode(episode, objects, size))
         return planned, evicted
+
+    def _episode_objects(self, episode: Episode) -> list[tuple[str, Path]]:
+        prefix = self.config.key_prefix
+        audio = Path(episode.audio_file)
+        objects = [(f"{prefix}audio/{audio.name}", audio)]
+        thumbnail = self._thumbnail_path(episode.image_url)
+        if thumbnail is not None:
+            objects.append((f"{prefix}thumbnails/{thumbnail.name}", thumbnail))
+        return objects
 
     def _list_objects(self) -> dict[str, int]:
         objects: dict[str, int] = {}

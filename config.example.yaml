@@ -59,6 +59,11 @@ storage:
     max_storage_bytes: 9000000000
     max_class_a_operations: 500000
     max_class_b_operations: 5000000
+    # One sync never deletes more than this share of max_storage_bytes;
+    # a bigger cleanup pauses the mirror instead
+    max_cleanup_percent: 10
+    # Storage is also checked this often (seconds) without new episodes
+    check_interval: 10800
     # Optional: also check account-wide usage (all buckets, reads by podcast
     # clients) via the Cloudflare analytics API. Token needs
     # "Account Analytics: Read". If the API is unreachable, writes pause.

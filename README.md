@@ -135,6 +135,10 @@ class B operations per month) and never writes past a limit:
 - `max_storage_bytes` (default 9 GB): the whole bucket is measured on every
   sync. When new episodes don't fit, the oldest are dropped from the public
   feed and deleted from the bucket. The local library is untouched.
+  One sync deletes at most `max_cleanup_percent` (default 10%) of the limit;
+  a bigger cleanup pauses the mirror. Storage is checked at startup, on
+  every feed change and every `check_interval` (default 3h). Deletes use single
+  `DeleteObject`, which R2 does not charge.
 - `max_class_a_operations` (default 500k): every request the service sends is
   counted in a local ledger over a rolling 31 days before it goes out.
 - `cloudflare_account_id` + `cloudflare_api_token_file` (optional, token

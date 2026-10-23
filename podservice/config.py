@@ -52,6 +52,12 @@ class S3Config:
     max_storage_bytes: int = 9_000_000_000
     max_class_a_operations: int = 500_000
     max_class_b_operations: int = 5_000_000
+    # A single sync never evicts more than this share of max_storage_bytes;
+    # a bigger cleanup pauses the mirror instead.
+    max_cleanup_percent: int = 10
+    # Seconds between storage checks when the feed does not change; each costs
+    # one class A listing.
+    check_interval: int = 10800
     # Optional account-wide usage via the Cloudflare GraphQL analytics API;
     # the token needs "Account Analytics: Read" (R2 S3 keys cannot do this).
     cloudflare_account_id: Optional[str] = None
@@ -91,9 +97,12 @@ class S3Config:
             "max_storage_bytes",
             "max_class_a_operations",
             "max_class_b_operations",
+            "check_interval",
         ):
             if int(getattr(self, name)) <= 0:
                 raise ValueError(f"storage.s3.{name} must be positive")
+        if not 0 < int(self.max_cleanup_percent) <= 100:
+            raise ValueError("storage.s3.max_cleanup_percent must be 1-100")
         if bool(self.cloudflare_account_id) != bool(self.cloudflare_api_token_file):
             raise ValueError(
                 "storage.s3.cloudflare_account_id and cloudflare_api_token_file "
@@ -334,6 +343,8 @@ def save_config(config: ServiceConfig, config_path: Optional[str] = None) -> Non
                 "max_storage_bytes": config.storage.s3.max_storage_bytes,
                 "max_class_a_operations": config.storage.s3.max_class_a_operations,
                 "max_class_b_operations": config.storage.s3.max_class_b_operations,
+                "max_cleanup_percent": config.storage.s3.max_cleanup_percent,
+                "check_interval": config.storage.s3.check_interval,
                 "cloudflare_account_id": config.storage.s3.cloudflare_account_id,
                 "cloudflare_api_token_file": config.storage.s3.cloudflare_api_token_file,
             },

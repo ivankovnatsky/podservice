@@ -46,10 +46,9 @@ class FakeS3:
         self.calls.append(("put", Key))
         self.objects[Key] = {"Body": Body, "ContentType": ContentType}
 
-    def delete_objects(self, Bucket, Delete):
-        for item in Delete["Objects"]:
-            self.calls.append(("delete", item["Key"]))
-            self.objects.pop(item["Key"], None)
+    def delete_object(self, Bucket, Key):
+        self.calls.append(("delete", Key))
+        self.objects.pop(Key, None)
 
 
 def make_config(**overrides):
@@ -272,7 +271,8 @@ def test_storage_limit_keeps_newest_episodes(tmp_path):
     add_episode(feed, tmp_path, "mid", with_thumbnail=False, size=400, day=2)
     add_episode(feed, tmp_path, "new", with_thumbnail=False, size=400, day=3)
     client = FakeS3({"secret/audio/old.mp3": {"Body": b"x" * 400}})
-    mirror = make_mirror(feed, tmp_path, client, make_config(max_storage_bytes=900))
+    mirror = make_mirror(feed, tmp_path, client, make_config(max_storage_bytes=900, max_cleanup_percent=50)
+    )
 
     mirror.sync()
 
@@ -368,6 +368,27 @@ def test_storage_fully_used_outside_mirror_pauses(tmp_path):
     assert not any(call[0] in ("upload", "put") for call in client.calls)
 
 
+def test_deletes_proceed_when_operation_budget_runs_out_mid_sync(tmp_path):
+    feed = make_feed()
+    add_episode(feed, tmp_path, "old", with_thumbnail=False, size=600, day=1)
+    add_episode(feed, tmp_path, "new", with_thumbnail=False, size=600, day=2)
+    client = FakeS3({"secret/audio/old.mp3": {"Body": b"x" * 600}})
+    # Room for the listing only.
+    mirror = make_mirror(
+        feed,
+        tmp_path,
+        client,
+        make_config(
+            max_storage_bytes=1000, max_class_a_operations=1, max_cleanup_percent=60
+        ),
+    )
+
+    with pytest.raises(BudgetExceeded, match="class A"):
+        mirror.sync()
+
+    assert "secret/audio/old.mp3" not in client.objects
+
+
 def test_every_request_is_charged_to_the_ledger(tmp_path):
     feed = make_feed()
     add_episode(feed, tmp_path, "one")
@@ -376,8 +397,9 @@ def test_every_request_is_charged_to_the_ledger(tmp_path):
 
     mirror.sync()
 
-    # list + audio + thumbnail + feed + delete batch
-    assert mirror.ledger.used() == 5
+    # list + audio + thumbnail + feed; deletes are free
+    assert mirror.ledger.used() == 4
+    assert ("delete", "secret/audio/gone.mp3") in client.calls
     assert (tmp_path / "db" / "ops.json").exists()
 
 
@@ -468,7 +490,11 @@ def test_mirror_can_shrink_when_account_is_over_the_limit(tmp_path):
     analytics = FakeAnalytics(R2AccountUsage(1200, 0, 0, {"test-bucket": 1200}))
 
     make_mirror(
-        feed, tmp_path, client, make_config(max_storage_bytes=1000), analytics
+        feed,
+        tmp_path,
+        client,
+        make_config(max_storage_bytes=1000, max_cleanup_percent=60),
+        analytics,
     ).sync()
 
     assert "secret/audio/old.mp3" not in client.objects
@@ -533,6 +559,73 @@ def test_unreachable_analytics_pauses_writes(tmp_path):
             feed, tmp_path, client, analytics=FakeAnalytics(error="timeout")
         ).sync()
     assert client.calls == []
+
+
+def test_cleanup_over_the_cap_pauses_without_deleting(tmp_path):
+    feed = make_feed()
+    add_episode(feed, tmp_path, "old", with_thumbnail=False, size=200, day=1)
+    add_episode(feed, tmp_path, "new", with_thumbnail=False, size=900, day=2)
+    client = FakeS3({"secret/audio/old.mp3": {"Body": b"x" * 200}})
+    mirror = make_mirror(feed, tmp_path, client, make_config(max_storage_bytes=1000))
+
+    with pytest.raises(BudgetExceeded, match="more than 10%"):
+        mirror.sync()
+
+    assert "secret/audio/old.mp3" in client.objects
+    assert not any(call[0] in ("upload", "put", "delete") for call in client.calls)
+
+
+def test_cleanup_within_the_cap_proceeds(tmp_path):
+    feed = make_feed()
+    add_episode(feed, tmp_path, "old", with_thumbnail=False, size=100, day=1)
+    add_episode(feed, tmp_path, "new", with_thumbnail=False, size=950, day=2)
+    client = FakeS3({"secret/audio/old.mp3": {"Body": b"x" * 100}})
+
+    make_mirror(feed, tmp_path, client, make_config(max_storage_bytes=1000)).sync()
+
+    assert "secret/audio/old.mp3" not in client.objects
+    assert "secret/audio/new.mp3" in client.objects
+
+
+def test_cap_ignores_unmirrored_and_locally_deleted_episodes(tmp_path):
+    feed = make_feed()
+    add_episode(feed, tmp_path, "old", with_thumbnail=False, size=900, day=1)
+    add_episode(feed, tmp_path, "new", with_thumbnail=False, size=900, day=2)
+    # "gone" was removed from the local library; "old" was never uploaded.
+    client = FakeS3({"secret/audio/gone.mp3": {"Body": b"x" * 500}})
+
+    make_mirror(feed, tmp_path, client, make_config(max_storage_bytes=1000)).sync()
+
+    assert set(k for k in client.objects if k.startswith("secret/audio/")) == {
+        "secret/audio/new.mp3"
+    }
+
+
+def test_cap_ignores_media_shared_with_kept_episodes(tmp_path):
+    feed = make_feed()
+    add_episode(feed, tmp_path, "old", with_thumbnail=False, size=50, day=1)
+    add_episode(feed, tmp_path, "new", with_thumbnail=False, size=900, day=2)
+    for episode in feed.episodes:
+        episode.image_url = f"{BASE_URL}/thumbnails/shared.jpg"
+    (tmp_path / "thumbnails" / "shared.jpg").write_bytes(b"x" * 80)
+    client = FakeS3(
+        {
+            "secret/audio/old.mp3": {"Body": b"x" * 50},
+            "secret/thumbnails/shared.jpg": {"Body": b"x" * 80},
+        }
+    )
+
+    make_mirror(feed, tmp_path, client, make_config(max_storage_bytes=1000)).sync()
+
+    assert "secret/audio/old.mp3" not in client.objects
+    assert "secret/thumbnails/shared.jpg" in client.objects
+
+
+def test_cleanup_percent_must_be_in_range():
+    with pytest.raises(ValueError, match="max_cleanup_percent"):
+        make_config(max_cleanup_percent=0)
+    with pytest.raises(ValueError, match="max_cleanup_percent"):
+        make_config(max_cleanup_percent=101)
 
 
 def test_limits_must_be_positive_and_analytics_paired():
